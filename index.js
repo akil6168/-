@@ -1,4 +1,4 @@
-// v9
+// v10
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -7,20 +7,42 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 const ADMIN_ID = 5724602667;
 const verifyMode = new Set();
 const passwordMode = new Map();
-const approvedUsers = new Set([ADMIN_ID]); // Admin সবসময় approved
+const approvedUsers = new Set([ADMIN_ID]);
+const broadcastMode = new Set();
 
-// File থেকে started users load করো
+// Files
 const STARTED_FILE = 'started_users.json';
+const APPROVED_FILE = 'approved_users.json';
+const SUBMISSIONS_FILE = 'submissions.json';
+
+// Load started users
 let startedUsers = new Set();
 if (fs.existsSync(STARTED_FILE)) {
+  try { startedUsers = new Set(JSON.parse(fs.readFileSync(STARTED_FILE, 'utf8'))); } catch (e) {}
+}
+
+// Load approved users
+if (fs.existsSync(APPROVED_FILE)) {
   try {
-    const data = JSON.parse(fs.readFileSync(STARTED_FILE, 'utf8'));
-    startedUsers = new Set(data);
+    const data = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf8'));
+    data.forEach(u => approvedUsers.add(u));
   } catch (e) {}
+}
+
+// Load submissions
+let submissions = [];
+if (fs.existsSync(SUBMISSIONS_FILE)) {
+  try { submissions = JSON.parse(fs.readFileSync(SUBMISSIONS_FILE, 'utf8')); } catch (e) {}
 }
 
 function saveStartedUsers() {
   fs.writeFileSync(STARTED_FILE, JSON.stringify([...startedUsers]));
+}
+function saveApprovedUsers() {
+  fs.writeFileSync(APPROVED_FILE, JSON.stringify([...approvedUsers]));
+}
+function saveSubmissions() {
+  fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify(submissions));
 }
 
 const pairs = [
@@ -87,7 +109,29 @@ bot.onText(/\/menu/, async (msg) => {
   });
 });
 
-// Admin: /approve [user_id] [password]
+// /admin panel
+bot.onText(/\/admin/, async (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+
+  await bot.sendMessage(ADMIN_ID,
+    '👑 *ADMIN PANEL*\n' +
+    '══════════════════',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '👥 Total Users', callback_data: 'admin_total' }],
+          [{ text: '✅ Approved Users', callback_data: 'admin_approved' }],
+          [{ text: '⏳ Pending Verify List', callback_data: 'admin_pending' }],
+          [{ text: '📋 Trader ID Submissions', callback_data: 'admin_submissions' }],
+          [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }]
+        ]
+      }
+    }
+  );
+});
+
+// /approve
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const parts = match[1].split(' ');
@@ -124,12 +168,27 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
+  // Broadcast mode
+  if (broadcastMode.has(userId) && userId === ADMIN_ID) {
+    broadcastMode.delete(userId);
+    let successCount = 0;
+    for (const uid of startedUsers) {
+      try {
+        await bot.sendMessage(uid, '📢 *Admin Message:*\n\n' + text, { parse_mode: 'Markdown' });
+        successCount++;
+      } catch (e) {}
+    }
+    await bot.sendMessage(ADMIN_ID, '✅ Broadcast sent to ' + successCount + ' users!');
+    return;
+  }
+
   // Password check
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
       passwordMode.delete(userId);
       approvedUsers.add(userId);
+      saveApprovedUsers();
       await bot.sendMessage(chatId,
         '🎉 *Bot access পেয়েছেন!*\n\n' +
         '📊 Trading signals পেতে /menu তে যান।',
@@ -149,6 +208,16 @@ bot.on('message', async (msg) => {
   }
 
   verifyMode.delete(userId);
+
+  // Save submission
+  submissions.push({
+    userId: userId,
+    name: firstName,
+    username: msg.from.username || null,
+    traderId: text,
+    time: new Date().toISOString()
+  });
+  saveSubmissions();
 
   await bot.sendMessage(ADMIN_ID,
     '🔔 *NEW TRADER ID SUBMISSION*\n\n' +
@@ -170,6 +239,69 @@ bot.on('callback_query', async (query) => {
   const userId = query.from.id;
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
+
+  // Admin callbacks
+  if (pair === 'admin_total' && userId === ADMIN_ID) {
+    await bot.sendMessage(ADMIN_ID,
+      '👥 *TOTAL USERS*\n\n' +
+      '📊 Total Started: `' + startedUsers.size + '`\n' +
+      '✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n' +
+      '📋 Total Submissions: `' + submissions.length + '`',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (pair === 'admin_approved' && userId === ADMIN_ID) {
+    const list = [...approvedUsers].filter(u => u !== ADMIN_ID);
+    if (list.length === 0) {
+      await bot.sendMessage(ADMIN_ID, '✅ কোনো approved user নেই।');
+      return;
+    }
+    let text = '✅ *APPROVED USERS*\n\n';
+    list.forEach((uid, i) => {
+      text += (i + 1) + '. `' + uid + '`\n';
+    });
+    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_pending' && userId === ADMIN_ID) {
+    const pending = submissions.filter(s => !approvedUsers.has(s.userId));
+    if (pending.length === 0) {
+      await bot.sendMessage(ADMIN_ID, '⏳ কোনো pending user নেই।');
+      return;
+    }
+    let text = '⏳ *PENDING VERIFY LIST*\n\n';
+    pending.forEach((s, i) => {
+      const uname = s.username ? '@' + s.username : s.name;
+      text += (i + 1) + '. ' + uname + '\n🆔 `' + s.userId + '`\n\n';
+    });
+    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_submissions' && userId === ADMIN_ID) {
+    if (submissions.length === 0) {
+      await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।');
+      return;
+    }
+    let text = '📋 *TRADER ID SUBMISSIONS*\n\n';
+    submissions.forEach((s, i) => {
+      const uname = s.username ? '@' + s.username : s.name;
+      text += (i + 1) + '. ' + uname + '\n' +
+        '🆔 User: `' + s.userId + '`\n' +
+        '📌 Trader ID: `' + s.traderId + '`\n\n';
+    });
+    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_broadcast' && userId === ADMIN_ID) {
+    broadcastMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '📢 যে message সব user কে পাঠাতে চাও সেটা লেখো:');
+    return;
+  }
 
   if (pair === '/verify') {
     verifyMode.add(userId);
@@ -198,10 +330,7 @@ bot.on('callback_query', async (query) => {
           { chat_id: chatId, message_id: loadId }
         );
       } catch (e) {}
-      if (count >= 100) {
-        clearInterval(loadInterval);
-        resolve();
-      }
+      if (count >= 100) { clearInterval(loadInterval); resolve(); }
     }, 30);
   });
 
@@ -216,26 +345,20 @@ bot.on('callback_query', async (query) => {
       const h = String(bd.getUTCHours()).padStart(2, '0');
       const m = String(bd.getUTCMinutes()).padStart(2, '0');
       const s = String(bd.getUTCSeconds()).padStart(2, '0');
-
       try {
         await bot.editMessageText(
           '🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
           { chat_id: chatId, message_id: clockId }
         );
       } catch (e) {}
-
-      if (bd.getUTCSeconds() === 58) {
-        clearInterval(clockInterval);
-        resolve();
-      }
+      if (bd.getUTCSeconds() === 58) { clearInterval(clockInterval); resolve(); }
     }, 1000);
   });
 
-  // Step 3: Delete
   try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
   try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
-  // Step 4: Premium Signal
+  // Signal
   const directions = ['UP⏫', 'DOWN⏬'];
   const randomDir = directions[Math.floor(Math.random() * 2)];
   const winRates = ['75%', '78%', '80%', '82%', '85%'];
