@@ -1,11 +1,13 @@
-// v6
+// v7
 const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const ADMIN_ID = 5724602667;
 const startedUsers = new Set();
-const verifyUsers = new Set();
+const verifyMode = new Set();
+const passwordMode = new Map(); // userId → password
+const approvedUsers = new Set();
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
@@ -50,8 +52,15 @@ bot.onText(/\/start/, async (msg) => {
 });
 
 // /menu
-bot.onText(/\/menu/, (msg) => {
+bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id;
+
+  if (!approvedUsers.has(userId)) {
+    await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
+    return;
+  }
+
   const keyboard = [];
   for (let i = 0; i < pairs.length; i += 2) {
     const row = [{ text: pairs[i], callback_data: pairs[i] }];
@@ -63,31 +72,71 @@ bot.onText(/\/menu/, (msg) => {
   });
 });
 
-// Message handler - Trader ID verification
+// Admin: /approve [user_id] [password]
+bot.onText(/\/approve (.+)/, async (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  const parts = match[1].split(' ');
+  if (parts.length < 2) {
+    await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id] [password]');
+    return;
+  }
+  const targetId = parseInt(parts[0]);
+  const password = parts[1];
+
+  passwordMode.set(targetId, password);
+
+  await bot.sendMessage(targetId,
+    '✅ *আপনার Trader ID verify হয়েছে!*\n\n' +
+    '🔐 Bot access করতে আপনার password দিন:',
+    { parse_mode: 'Markdown' }
+  );
+
+  await bot.sendMessage(ADMIN_ID, '✅ User `' + targetId + '` কে approve করা হয়েছে।\n🔑 Password: `' + password + '`', { parse_mode: 'Markdown' });
+});
+
+// Message handler
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const text = msg.text;
   const userId = msg.from.id;
   const firstName = msg.from.first_name || 'User';
+  const username = msg.from.username ? '@' + msg.from.username : '[' + firstName + '](tg://user?id=' + userId + ')';
 
   if (!text || text.startsWith('/')) return;
 
-  // Verify mode এ আছে কিনা
-  if (!verifyUsers.has(userId)) return;
+  // Password check
+  if (passwordMode.has(userId)) {
+    const correctPass = passwordMode.get(userId);
+    if (text === correctPass) {
+      passwordMode.delete(userId);
+      approvedUsers.add(userId);
+      await bot.sendMessage(chatId,
+        '🎉 *Bot access পেয়েছেন!*\n\n' +
+        '📊 Trading signals পেতে /menu তে যান।',
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await bot.sendMessage(chatId, '❌ ভুল password! আবার চেষ্টা করুন।');
+    }
+    return;
+  }
 
-  // 8 digit check
+  // Verify mode
+  if (!verifyMode.has(userId)) return;
+
   if (!/^\d{8}$/.test(text)) {
     await bot.sendMessage(chatId, '❌ ভুল Trader ID\n\n📌 সঠিক 8-digit Trader ID পাঠান।');
     return;
   }
 
-  verifyUsers.delete(userId);
+  verifyMode.delete(userId);
 
   await bot.sendMessage(ADMIN_ID,
     '🔔 *NEW TRADER ID SUBMISSION*\n\n' +
-    '👤 Name: ' + firstName + '\n' +
+    '👤 Name: ' + username + '\n' +
     '🆔 User ID: `' + userId + '`\n' +
-    '📌 Trader ID: `' + text + '`',
+    '📌 Trader ID: `' + text + '`\n\n' +
+    '✅ Approve: `/approve ' + userId + ' [password]`',
     { parse_mode: 'Markdown' }
   );
 
@@ -103,14 +152,18 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
-  // Verify button
   if (pair === '/verify') {
-    verifyUsers.add(userId);
+    verifyMode.add(userId);
     await bot.sendMessage(chatId, '📌 আপনার 8-digit Trader ID পাঠান:');
     return;
   }
 
   if (!pairs.includes(pair)) return;
+
+  if (!approvedUsers.has(userId)) {
+    await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
+    return;
+  }
 
   // Step 1: Loading
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
