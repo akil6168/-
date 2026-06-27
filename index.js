@@ -1,4 +1,4 @@
-// v10
+// v11
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -260,7 +260,9 @@ bot.on('callback_query', async (query) => {
     }
     let text = '✅ *APPROVED USERS*\n\n';
     list.forEach((uid, i) => {
-      text += (i + 1) + '. `' + uid + '`\n';
+      const sub = submissions.find(s => s.userId === uid);
+      const traderId = sub ? sub.traderId : 'N/A';
+      text += (i + 1) + '. 🆔 `' + uid + '`\n📌 Trader ID: `' + traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -363,14 +365,9 @@ bot.on('callback_query', async (query) => {
   const randomDir = directions[Math.floor(Math.random() * 2)];
   const winRates = ['75%', '78%', '80%', '82%', '85%'];
   const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
-  const patterns = ['Doji Reversal', 'Bullish Engulfing', 'Bearish Engulfing', 'Hammer', 'Shooting Star', 'Morning Star', 'Evening Star'];
 
-  const isUp = randomDir === 'UP⏫';
-  const trend = isUp ? 'Uptrend 📈' : 'Downtrend 📉';
-  const trendEmoji = isUp ? '📈' : '📉';
   const winRate = winRates[Math.floor(Math.random() * winRates.length)];
   const confidence = confidences[Math.floor(Math.random() * confidences.length)];
-  const pattern = patterns[Math.floor(Math.random() * patterns.length)];
 
   const now2 = new Date();
   const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
@@ -387,14 +384,12 @@ bot.on('callback_query', async (query) => {
     '🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n' +
     '══════════════════\n' +
     '🚀 *DIRECTION* ➜ ' + randomDir + '\n' +
-    '♻️ *PATTERN*    ➜ `' + pattern + '`\n' +
-    trendEmoji + ' *TREND*        ➜ ' + trend + '\n' +
     '══════════════════\n' +
-    '✅ *WIN RATE* » `' + winRate + '`\n' +
+    '♻️ *WIN RATE* » `' + winRate + '`\n' +
     '✅ *CONFIDENCE* » ' + confidence + '\n' +
     '══════════════════\n' +
     '⏹️ *Take the trade now!*\n' +
-    '⚠️ _Trade at your own risk_',
+    '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
     { parse_mode: 'Markdown' }
   );
 });
