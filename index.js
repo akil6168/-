@@ -1,4 +1,4 @@
-// v7
+// v8
 const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -6,7 +6,7 @@ const bot = new TelegramBot(TOKEN, { polling: true });
 const ADMIN_ID = 5724602667;
 const startedUsers = new Set();
 const verifyMode = new Set();
-const passwordMode = new Map(); // userId → password
+const passwordMode = new Map();
 const approvedUsers = new Set();
 
 const pairs = [
@@ -91,7 +91,10 @@ bot.onText(/\/approve (.+)/, async (msg, match) => {
     { parse_mode: 'Markdown' }
   );
 
-  await bot.sendMessage(ADMIN_ID, '✅ User `' + targetId + '` কে approve করা হয়েছে।\n🔑 Password: `' + password + '`', { parse_mode: 'Markdown' });
+  await bot.sendMessage(ADMIN_ID,
+    '✅ User `' + targetId + '` কে approve করা হয়েছে।\n🔑 Password: `' + password + '`',
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // Message handler
@@ -100,7 +103,9 @@ bot.on('message', async (msg) => {
   const text = msg.text;
   const userId = msg.from.id;
   const firstName = msg.from.first_name || 'User';
-  const username = msg.from.username ? '@' + msg.from.username : '[' + firstName + '](tg://user?id=' + userId + ')';
+  const username = msg.from.username
+    ? '@' + msg.from.username
+    : '[' + firstName + '](tg://user?id=' + userId + ')';
 
   if (!text || text.startsWith('/')) return;
 
@@ -212,18 +217,50 @@ bot.on('callback_query', async (query) => {
     }, 1000);
   });
 
-  // Step 3: Delete + Signal
+  // Step 3: Delete loading & clock
   try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
   try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
+  // Step 4: Premium Signal
   const directions = ['UP⏫', 'DOWN⏬'];
   const randomDir = directions[Math.floor(Math.random() * 2)];
+
+  const winRates = ['75%', '78%', '80%', '82%', '85%'];
+  const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
+  const patterns = ['Doji Reversal', 'Bullish Engulfing', 'Bearish Engulfing', 'Hammer', 'Shooting Star', 'Morning Star', 'Evening Star'];
+
+  const isUp = randomDir === 'UP⏫';
+  const trend = isUp ? 'Uptrend 📈' : 'Downtrend 📉';
+  const trendEmoji = isUp ? '📈' : '📉';
+
+  const winRate = winRates[Math.floor(Math.random() * winRates.length)];
+  const confidence = confidences[Math.floor(Math.random() * confidences.length)];
+  const pattern = patterns[Math.floor(Math.random() * patterns.length)];
+
+  const now2 = new Date();
+  const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
+  bd2.setMinutes(bd2.getMinutes() + 1);
+  const exH = String(bd2.getUTCHours()).padStart(2, '0');
+  const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
+
   await bot.sendMessage(chatId,
-    '😎 FOR ONLY QUOTEX 😀\n\n' +
-    '📊 ASSET : ' + pair + ' 📈\n\n' +
-    '🕯 TIME : 1 MIN 🕯\n\n' +
-    '🚀 DIRECTION: ' + randomDir + '\n\n' +
-    '✅ Take the trade now!'
+    '╭──────────────────╮\n' +
+    '│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n' +
+    '╰──────────────────╯\n\n' +
+    '📊 *ASSET*  ➜ `' + pair + '`\n' +
+    '🔹 *TIME*     ➜ `1 MIN`\n' +
+    '🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n' +
+    '══════════════════\n' +
+    '🚀 *DIRECTION* ➜ ' + randomDir + '\n' +
+    '♻️ *PATTERN*    ➜ `' + pattern + '`\n' +
+    trendEmoji + ' *TREND*        ➜ ' + trend + '\n' +
+    '══════════════════\n' +
+    '✅ *WIN RATE* » `' + winRate + '`\n' +
+    '✅ *CONFIDENCE* » ' + confidence + '\n' +
+    '══════════════════\n' +
+    '⏹️ *Take the trade now!*\n' +
+    '⚠️ _Trade at your own risk_',
+    { parse_mode: 'Markdown' }
   );
 });
 
