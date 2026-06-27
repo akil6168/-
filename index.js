@@ -1,10 +1,11 @@
-// v5
+// v6
 const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const ADMIN_ID = 5724602667;
 const startedUsers = new Set();
+const verifyUsers = new Set();
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
@@ -14,13 +15,12 @@ const pairs = [
   'CAD/CHF OTC'
 ];
 
-// /start command
+// /start
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name || 'User';
   const userId = msg.from.id;
 
-  // নতুন user হলে admin কে notify করো
   if (!startedUsers.has(userId)) {
     startedUsers.add(userId);
     await bot.sendMessage(ADMIN_ID,
@@ -49,7 +49,7 @@ bot.onText(/\/start/, async (msg) => {
   );
 });
 
-// /menu command
+// /menu
 bot.onText(/\/menu/, (msg) => {
   const chatId = msg.chat.id;
   const keyboard = [];
@@ -63,14 +63,56 @@ bot.onText(/\/menu/, (msg) => {
   });
 });
 
+// Message handler - Trader ID verification
+bot.on('message', async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+  const userId = msg.from.id;
+  const firstName = msg.from.first_name || 'User';
+
+  if (!text || text.startsWith('/')) return;
+
+  // Verify mode এ আছে কিনা
+  if (!verifyUsers.has(userId)) return;
+
+  // 8 digit check
+  if (!/^\d{8}$/.test(text)) {
+    await bot.sendMessage(chatId, '❌ ভুল Trader ID\n\n📌 সঠিক 8-digit Trader ID পাঠান।');
+    return;
+  }
+
+  verifyUsers.delete(userId);
+
+  await bot.sendMessage(ADMIN_ID,
+    '🔔 *NEW TRADER ID SUBMISSION*\n\n' +
+    '👤 Name: ' + firstName + '\n' +
+    '🆔 User ID: `' + userId + '`\n' +
+    '📌 Trader ID: `' + text + '`',
+    { parse_mode: 'Markdown' }
+  );
+
+  await bot.sendMessage(chatId,
+    '✅ আপনার Trader ID পাঠানো হয়েছে।\nAdmin verification এর জন্য অপেক্ষা করুন।'
+  );
+});
+
+// Callback handler
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
+  const userId = query.from.id;
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
+  // Verify button
+  if (pair === '/verify') {
+    verifyUsers.add(userId);
+    await bot.sendMessage(chatId, '📌 আপনার 8-digit Trader ID পাঠান:');
+    return;
+  }
+
   if (!pairs.includes(pair)) return;
 
-  // Step 1: Loading 1→100
+  // Step 1: Loading
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
   const loadId = loadMsg.message_id;
   let count = 0;
