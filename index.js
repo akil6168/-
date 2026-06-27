@@ -10,6 +10,18 @@ const passwordMode = new Map();
 const approvedUsers = new Set([ADMIN_ID]);
 const broadcastMode = new Set();
 
+// v12
+const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
+const TOKEN = process.env.BOT_TOKEN;
+const bot = new TelegramBot(TOKEN, { polling: true });
+
+const ADMIN_ID = 5724602667;
+const verifyMode = new Set();
+const passwordMode = new Map();
+const approvedUsers = new Set([ADMIN_ID]);
+const broadcastMode = new Set();
+
 // Files
 const STARTED_FILE = 'started_users.json';
 const APPROVED_FILE = 'approved_users.json';
@@ -168,9 +180,9 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
-  // Broadcast mode
-  if (broadcastMode.has(userId) && userId === ADMIN_ID) {
-    broadcastMode.delete(userId);
+  // Broadcast mode — fixed
+  if (broadcastMode.has(ADMIN_ID) && userId === ADMIN_ID) {
+    broadcastMode.delete(ADMIN_ID);
     let successCount = 0;
     for (const uid of startedUsers) {
       try {
