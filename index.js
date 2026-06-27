@@ -1,4 +1,4 @@
-// v3
+// v4
 const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
@@ -29,7 +29,7 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
-  // Step 1: Loading 1→100 একটা message এ edit করে
+  // Step 1: Loading 1→100
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
   const loadId = loadMsg.message_id;
   let count = 0;
@@ -50,7 +50,7 @@ bot.on('callback_query', async (query) => {
     }, 30);
   });
 
-  // Step 2: Clock একটা message এ edit করে
+  // Step 2: Clock
   const clockMsg = await bot.sendMessage(chatId, '🕐 Signal generating...\n\n⏰ Bangladesh Time: --:--:--');
   const clockId = clockMsg.message_id;
 
@@ -76,7 +76,10 @@ bot.on('callback_query', async (query) => {
     }, 1000);
   });
 
-  // Step 3: Signal
+  // Step 3: Delete loading & clock, then send signal
+  try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
+  try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
+
   const directions = ['UP⏫', 'DOWN⏬'];
   const randomDir = directions[Math.floor(Math.random() * 2)];
   await bot.sendMessage(chatId,
