@@ -1,13 +1,27 @@
-// v8
+// v9
 const TelegramBot = require('node-telegram-bot-api');
+const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const ADMIN_ID = 5724602667;
-const startedUsers = new Set();
 const verifyMode = new Set();
 const passwordMode = new Map();
-const approvedUsers = new Set();
+const approvedUsers = new Set([ADMIN_ID]); // Admin সবসময় approved
+
+// File থেকে started users load করো
+const STARTED_FILE = 'started_users.json';
+let startedUsers = new Set();
+if (fs.existsSync(STARTED_FILE)) {
+  try {
+    const data = JSON.parse(fs.readFileSync(STARTED_FILE, 'utf8'));
+    startedUsers = new Set(data);
+  } catch (e) {}
+}
+
+function saveStartedUsers() {
+  fs.writeFileSync(STARTED_FILE, JSON.stringify([...startedUsers]));
+}
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
@@ -25,6 +39,7 @@ bot.onText(/\/start/, async (msg) => {
 
   if (!startedUsers.has(userId)) {
     startedUsers.add(userId);
+    saveStartedUsers();
     await bot.sendMessage(ADMIN_ID,
       '♻️ *NEW USER STARTED BOT* ➕\n\n' +
       '👤 Name: ' + firstName + '\n' +
@@ -126,7 +141,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Verify mode
   if (!verifyMode.has(userId)) return;
 
   if (!/^\d{8}$/.test(text)) {
@@ -217,14 +231,13 @@ bot.on('callback_query', async (query) => {
     }, 1000);
   });
 
-  // Step 3: Delete loading & clock
+  // Step 3: Delete
   try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
   try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
   // Step 4: Premium Signal
   const directions = ['UP⏫', 'DOWN⏬'];
   const randomDir = directions[Math.floor(Math.random() * 2)];
-
   const winRates = ['75%', '78%', '80%', '82%', '85%'];
   const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
   const patterns = ['Doji Reversal', 'Bullish Engulfing', 'Bearish Engulfing', 'Hammer', 'Shooting Star', 'Morning Star', 'Evening Star'];
@@ -232,7 +245,6 @@ bot.on('callback_query', async (query) => {
   const isUp = randomDir === 'UP⏫';
   const trend = isUp ? 'Uptrend 📈' : 'Downtrend 📉';
   const trendEmoji = isUp ? '📈' : '📉';
-
   const winRate = winRates[Math.floor(Math.random() * winRates.length)];
   const confidence = confidences[Math.floor(Math.random() * confidences.length)];
   const pattern = patterns[Math.floor(Math.random() * patterns.length)];
