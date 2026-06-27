@@ -1,7 +1,10 @@
-// v4
+// v5
 const TelegramBot = require('node-telegram-bot-api');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
+
+const ADMIN_ID = 5724602667;
+const startedUsers = new Set();
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
@@ -11,6 +14,42 @@ const pairs = [
   'CAD/CHF OTC'
 ];
 
+// /start command
+bot.onText(/\/start/, async (msg) => {
+  const chatId = msg.chat.id;
+  const firstName = msg.from.first_name || 'User';
+  const userId = msg.from.id;
+
+  // নতুন user হলে admin কে notify করো
+  if (!startedUsers.has(userId)) {
+    startedUsers.add(userId);
+    await bot.sendMessage(ADMIN_ID,
+      '♻️ *NEW USER STARTED BOT* ➕\n\n' +
+      '👤 Name: ' + firstName + '\n' +
+      '🆔 ID: `' + userId + '`',
+      { parse_mode: 'Markdown' }
+    );
+  }
+
+  await bot.sendMessage(chatId,
+    '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
+    '📈 Get full access to premium trading signals.\n\n' +
+    '🏆 Trade smarter with our advanced signal system.\n\n' +
+    '📌 Send your 8-digit Trader ID for verification.\n\n' +
+    '✅ Access premium features after verification.',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/?lid=2177266' }],
+          [{ text: '✅ Verify Trader ID', callback_data: '/verify' }]
+        ]
+      }
+    }
+  );
+});
+
+// /menu command
 bot.onText(/\/menu/, (msg) => {
   const chatId = msg.chat.id;
   const keyboard = [];
@@ -28,6 +67,8 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
+
+  if (!pairs.includes(pair)) return;
 
   // Step 1: Loading 1→100
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
@@ -76,7 +117,7 @@ bot.on('callback_query', async (query) => {
     }, 1000);
   });
 
-  // Step 3: Delete loading & clock, then send signal
+  // Step 3: Delete + Signal
   try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
   try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
