@@ -1,15 +1,3 @@
-// v11
-const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
-const TOKEN = process.env.BOT_TOKEN;
-const bot = new TelegramBot(TOKEN, { polling: true });
-
-const ADMIN_ID = 5724602667;
-const verifyMode = new Set();
-const passwordMode = new Map();
-const approvedUsers = new Set([ADMIN_ID]);
-const broadcastMode = new Set();
-
 // v10
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
