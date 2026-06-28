@@ -1,4 +1,4 @@
-// v12
+// v13
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -187,8 +187,15 @@ bot.on('message', async (msg) => {
       saveApprovedUsers();
       await bot.sendMessage(chatId,
         '🎉 *Bot access পেয়েছেন!*\n\n' +
-        '📊 Trading signals পেতে /menu তে যান।',
-        { parse_mode: 'Markdown' }
+        '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '➕ Generate New Signal 📊', callback_data: 'go_menu' }]
+            ]
+          }
+        }
       );
     } else {
       await bot.sendMessage(chatId, '❌ ভুল password! আবার চেষ্টা করুন।');
@@ -235,6 +242,7 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
+  // Admin callbacks
   if (pair === 'admin_total' && userId === ADMIN_ID) {
     await bot.sendMessage(ADMIN_ID,
       '👥 *TOTAL USERS*\n\n' +
@@ -301,6 +309,24 @@ bot.on('callback_query', async (query) => {
   if (pair === 'admin_broadcast' && userId === ADMIN_ID) {
     broadcastMode.add(ADMIN_ID);
     await bot.sendMessage(ADMIN_ID, '📢 যে message সব user কে পাঠাতে চাও সেটা লেখো:');
+    return;
+  }
+
+  // Go menu button
+  if (pair === 'go_menu') {
+    if (!approvedUsers.has(userId)) {
+      await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
+      return;
+    }
+    const keyboard = [];
+    for (let i = 0; i < pairs.length; i += 2) {
+      const row = [{ text: pairs[i], callback_data: pairs[i] }];
+      if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
+      keyboard.push(row);
+    }
+    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇', {
+      reply_markup: { inline_keyboard: keyboard }
+    });
     return;
   }
 
@@ -387,7 +413,14 @@ bot.on('callback_query', async (query) => {
     '══════════════════\n' +
     '⏹️ *Take the trade now!*\n' +
     '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
-    { parse_mode: 'Markdown' }
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Generate New Signal 📊', callback_data: 'go_menu' }]
+        ]
+      }
+    }
   );
 });
 
