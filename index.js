@@ -1,4 +1,4 @@
-// v13
+// v14
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -41,6 +41,14 @@ function saveSubmissions() {
   fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify(submissions));
 }
 
+const approvedKeyboard = {
+  keyboard: [
+    [{ text: '➕ Generate New Signal 📊' }]
+  ],
+  resize_keyboard: true,
+  persistent: true
+};
+
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
   'AUD/USD OTC', 'USD/CAD OTC', 'EUR/GBP OTC',
@@ -48,6 +56,18 @@ const pairs = [
   'USD/INR OTC', 'USD/BDT OTC', 'USD/IDR OTC',
   'CAD/CHF OTC'
 ];
+
+function sendPairMenu(chatId) {
+  const keyboard = [];
+  for (let i = 0; i < pairs.length; i += 2) {
+    const row = [{ text: pairs[i], callback_data: pairs[i] }];
+    if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
+    keyboard.push(row);
+  }
+  bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇', {
+    reply_markup: { inline_keyboard: keyboard }
+  });
+}
 
 // /start
 bot.onText(/\/start/, async (msg) => {
@@ -64,6 +84,19 @@ bot.onText(/\/start/, async (msg) => {
       '🆔 ID: `' + userId + '`',
       { parse_mode: 'Markdown' }
     );
+  }
+
+  // Admin এর জন্য keyboard সবসময় দেখাবে
+  if (userId === ADMIN_ID || approvedUsers.has(userId)) {
+    await bot.sendMessage(chatId,
+      '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
+      '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: approvedKeyboard
+      }
+    );
+    return;
   }
 
   await bot.sendMessage(chatId,
@@ -94,15 +127,7 @@ bot.onText(/\/menu/, async (msg) => {
     return;
   }
 
-  const keyboard = [];
-  for (let i = 0; i < pairs.length; i += 2) {
-    const row = [{ text: pairs[i], callback_data: pairs[i] }];
-    if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
-    keyboard.push(row);
-  }
-  bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇', {
-    reply_markup: { inline_keyboard: keyboard }
-  });
+  sendPairMenu(chatId);
 });
 
 // /admin
@@ -164,6 +189,16 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
+  // Reply keyboard button
+  if (text === '➕ Generate New Signal 📊') {
+    if (!approvedUsers.has(userId)) {
+      await bot.sendMessage(chatId, '🔒 আপনার account verified না।');
+      return;
+    }
+    sendPairMenu(chatId);
+    return;
+  }
+
   // Broadcast mode
   if (broadcastMode.has(userId) && userId === ADMIN_ID) {
     broadcastMode.delete(userId);
@@ -187,14 +222,10 @@ bot.on('message', async (msg) => {
       saveApprovedUsers();
       await bot.sendMessage(chatId,
         '🎉 *Bot access পেয়েছেন!*\n\n' +
-        '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
+        '📊 নিচের বাটনে ক্লিক করে signal নিন।',
         {
           parse_mode: 'Markdown',
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: '➕ Generate New Signal 📊', callback_data: 'go_menu' }]
-            ]
-          }
+          reply_markup: approvedKeyboard
         }
       );
     } else {
@@ -242,7 +273,6 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
-  // Admin callbacks
   if (pair === 'admin_total' && userId === ADMIN_ID) {
     await bot.sendMessage(ADMIN_ID,
       '👥 *TOTAL USERS*\n\n' +
@@ -309,24 +339,6 @@ bot.on('callback_query', async (query) => {
   if (pair === 'admin_broadcast' && userId === ADMIN_ID) {
     broadcastMode.add(ADMIN_ID);
     await bot.sendMessage(ADMIN_ID, '📢 যে message সব user কে পাঠাতে চাও সেটা লেখো:');
-    return;
-  }
-
-  // Go menu button
-  if (pair === 'go_menu') {
-    if (!approvedUsers.has(userId)) {
-      await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
-      return;
-    }
-    const keyboard = [];
-    for (let i = 0; i < pairs.length; i += 2) {
-      const row = [{ text: pairs[i], callback_data: pairs[i] }];
-      if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
-      keyboard.push(row);
-    }
-    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇', {
-      reply_markup: { inline_keyboard: keyboard }
-    });
     return;
   }
 
@@ -413,14 +425,7 @@ bot.on('callback_query', async (query) => {
     '══════════════════\n' +
     '⏹️ *Take the trade now!*\n' +
     '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
-    {
-      parse_mode: 'Markdown',
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '➕ Generate New Signal 📊', callback_data: 'go_menu' }]
-        ]
-      }
-    }
+    { parse_mode: 'Markdown' }
   );
 });
 
