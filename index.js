@@ -1,4 +1,4 @@
-// v11
+// v12
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -235,7 +235,6 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
-  // Admin callbacks
   if (pair === 'admin_total' && userId === ADMIN_ID) {
     await bot.sendMessage(ADMIN_ID,
       '👥 *TOTAL USERS*\n\n' +
@@ -255,7 +254,6 @@ bot.on('callback_query', async (query) => {
     }
     let text = '✅ *APPROVED USERS*\n\n';
     list.forEach((uid, i) => {
-      // Submission থেকে trader ID খুঁজবো
       const sub = submissions.find(s => s.userId === uid);
       const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
       const traderId = sub ? sub.traderId : 'N/A';
@@ -308,12 +306,7 @@ bot.on('callback_query', async (query) => {
 
   if (pair === '/verify') {
     verifyMode.add(userId);
-    await bot.sendMessage(chatId,
-      '🔐 *VERIFICATION REQUIRED*\n\n' +
-      'আপনার 8-digit Quotex\n' +
-      'Trader ID পাঠান 👇',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(chatId, '📌 আপনার 8-digit Quotex Trader ID পাঠান:');
     return;
   }
 
@@ -371,7 +364,6 @@ bot.on('callback_query', async (query) => {
   const randomDir = directions[Math.floor(Math.random() * 2)];
   const winRates = ['75%', '78%', '80%', '82%', '85%'];
   const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
-
   const winRate = winRates[Math.floor(Math.random() * winRates.length)];
   const confidence = confidences[Math.floor(Math.random() * confidences.length)];
 
