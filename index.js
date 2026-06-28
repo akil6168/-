@@ -109,7 +109,7 @@ bot.onText(/\/start/, async (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/?lid=2177266' }],
+          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
           [{ text: '✅ Verify Trader ID', callback_data: '/verify' }]
         ]
       }
