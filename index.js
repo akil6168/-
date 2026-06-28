@@ -1,4 +1,4 @@
-// v10
+// v11
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
 const TOKEN = process.env.BOT_TOKEN;
@@ -10,18 +10,15 @@ const passwordMode = new Map();
 const approvedUsers = new Set([ADMIN_ID]);
 const broadcastMode = new Set();
 
-// Files
 const STARTED_FILE = 'started_users.json';
 const APPROVED_FILE = 'approved_users.json';
 const SUBMISSIONS_FILE = 'submissions.json';
 
-// Load started users
 let startedUsers = new Set();
 if (fs.existsSync(STARTED_FILE)) {
   try { startedUsers = new Set(JSON.parse(fs.readFileSync(STARTED_FILE, 'utf8'))); } catch (e) {}
 }
 
-// Load approved users
 if (fs.existsSync(APPROVED_FILE)) {
   try {
     const data = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf8'));
@@ -29,7 +26,6 @@ if (fs.existsSync(APPROVED_FILE)) {
   } catch (e) {}
 }
 
-// Load submissions
 let submissions = [];
 if (fs.existsSync(SUBMISSIONS_FILE)) {
   try { submissions = JSON.parse(fs.readFileSync(SUBMISSIONS_FILE, 'utf8')); } catch (e) {}
@@ -74,7 +70,7 @@ bot.onText(/\/start/, async (msg) => {
     '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
     '📈 Get full access to premium trading signals.\n\n' +
     '🏆 Trade smarter with our advanced signal system.\n\n' +
-    '📌 Send your 8-digit Trader ID for verification.\n\n' +
+    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার 8-digit Trader ID পাঠান verification এর জন্য।\n\n' +
     '✅ Access premium features after verification.',
     {
       parse_mode: 'Markdown',
@@ -109,7 +105,7 @@ bot.onText(/\/menu/, async (msg) => {
   });
 });
 
-// /admin panel
+// /admin
 bot.onText(/\/admin/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
 
@@ -209,7 +205,6 @@ bot.on('message', async (msg) => {
 
   verifyMode.delete(userId);
 
-  // Save submission
   submissions.push({
     userId: userId,
     name: firstName,
@@ -260,7 +255,13 @@ bot.on('callback_query', async (query) => {
     }
     let text = '✅ *APPROVED USERS*\n\n';
     list.forEach((uid, i) => {
-      text += (i + 1) + '. `' + uid + '`\n';
+      // Submission থেকে trader ID খুঁজবো
+      const sub = submissions.find(s => s.userId === uid);
+      const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
+      const traderId = sub ? sub.traderId : 'N/A';
+      text += (i + 1) + '. ' + uname + '\n' +
+        '🆔 User: `' + uid + '`\n' +
+        '📌 Trader ID: `' + traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -275,7 +276,9 @@ bot.on('callback_query', async (query) => {
     let text = '⏳ *PENDING VERIFY LIST*\n\n';
     pending.forEach((s, i) => {
       const uname = s.username ? '@' + s.username : s.name;
-      text += (i + 1) + '. ' + uname + '\n🆔 `' + s.userId + '`\n\n';
+      text += (i + 1) + '. ' + uname + '\n' +
+        '🆔 `' + s.userId + '`\n' +
+        '📌 Trader ID: `' + s.traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -305,7 +308,12 @@ bot.on('callback_query', async (query) => {
 
   if (pair === '/verify') {
     verifyMode.add(userId);
-    await bot.sendMessage(chatId, '📌 আপনার 8-digit Trader ID পাঠান:');
+    await bot.sendMessage(chatId,
+      '🔐 *VERIFICATION REQUIRED*\n\n' +
+      'আপনার 8-digit Quotex\n' +
+      'Trader ID পাঠান 👇',
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
@@ -363,14 +371,9 @@ bot.on('callback_query', async (query) => {
   const randomDir = directions[Math.floor(Math.random() * 2)];
   const winRates = ['75%', '78%', '80%', '82%', '85%'];
   const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
-  const patterns = ['Doji Reversal', 'Bullish Engulfing', 'Bearish Engulfing', 'Hammer', 'Shooting Star', 'Morning Star', 'Evening Star'];
 
-  const isUp = randomDir === 'UP⏫';
-  const trend = isUp ? 'Uptrend 📈' : 'Downtrend 📉';
-  const trendEmoji = isUp ? '📈' : '📉';
   const winRate = winRates[Math.floor(Math.random() * winRates.length)];
   const confidence = confidences[Math.floor(Math.random() * confidences.length)];
-  const pattern = patterns[Math.floor(Math.random() * patterns.length)];
 
   const now2 = new Date();
   const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
@@ -387,14 +390,11 @@ bot.on('callback_query', async (query) => {
     '🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n' +
     '══════════════════\n' +
     '🚀 *DIRECTION* ➜ ' + randomDir + '\n' +
-    '♻️ *PATTERN*    ➜ `' + pattern + '`\n' +
-    trendEmoji + ' *TREND*        ➜ ' + trend + '\n' +
-    '══════════════════\n' +
-    '✅ *WIN RATE* » `' + winRate + '`\n' +
-    '✅ *CONFIDENCE* » ' + confidence + '\n' +
+    '♻️ *WIN RATE*   ➜ `' + winRate + '`\n' +
+    '✅ *CONFIDENCE* ➜ ' + confidence + '\n' +
     '══════════════════\n' +
     '⏹️ *Take the trade now!*\n' +
-    '⚠️ _Trade at your own risk_',
+    '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
     { parse_mode: 'Markdown' }
   );
 });
