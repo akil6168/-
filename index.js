@@ -50,21 +50,10 @@ const approvedKeyboard = {
 };
 
 const pairs = [
-  // Majors
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
-  'AUD/USD OTC', 'USD/CAD OTC', 'USD/CHF OTC',
-  'NZD/USD OTC',
-  // Minors
-  'EUR/GBP OTC', 'EUR/JPY OTC', 'EUR/AUD OTC',
-  'EUR/NZD OTC', 'GBP/JPY OTC', 'GBP/AUD OTC',
-  'GBP/NZD OTC', 'AUD/JPY OTC', 'AUD/CAD OTC',
-  'AUD/NZD OTC', 'CAD/CHF OTC', 'CHF/JPY OTC',
-  // Exotics
-  'USD/PKR OTC', 'USD/INR OTC', 'USD/BDT OTC',
-  'USD/IDR OTC', 'USD/BRL OTC', 'USD/MXN OTC',
-  'USD/TRY OTC', 'USD/ZAR OTC', 'USD/SGD OTC',
-  // Crypto OTC
-  'BTC/USD OTC', 'ETH/USD OTC', 'LTC/USD OTC'
+  'AUD/USD OTC', 'EUR/GBP OTC', 'EUR/NZD OTC',
+  'GBP/NZD OTC', 'CAD/CHF OTC', 'EUR/JPY OTC',
+  'GBP/JPY OTC', 'USD/CHF OTC'
 ];
 
 function sendPairMenu(chatId) {
