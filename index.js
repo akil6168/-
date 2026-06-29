@@ -240,7 +240,7 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
 
   if (bannedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে। Bot use করতে পারবেন না। সাপোর্টে যোগাযোগ করুন : @AkiL_xD);
+    await bot.sendMessage(chatId, '🚫 আপনি ban করা হয়েছেন। Bot use করতে পারবেন না।');
     return;
   }
 
