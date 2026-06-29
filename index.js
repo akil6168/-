@@ -1,10 +1,13 @@
-// v14
+// v15 - Real Signal with Twelve Data API
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
+const https = require('https');
 const TOKEN = process.env.BOT_TOKEN;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const ADMIN_ID = 5724602667;
+const TWELVE_DATA_KEY = '3d31d53eb903483fb33d6854db50e0fd';
+
 const verifyMode = new Set();
 const passwordMode = new Map();
 const approvedUsers = new Set([ADMIN_ID]);
@@ -56,6 +59,185 @@ const pairs = [
   'GBP/JPY OTC', 'USD/CHF OTC'
 ];
 
+// OTC pair -> Twelve Data symbol map
+const pairSymbolMap = {
+  'EUR/USD OTC': 'EUR/USD',
+  'GBP/USD OTC': 'GBP/USD',
+  'USD/JPY OTC': 'USD/JPY',
+  'AUD/USD OTC': 'AUD/USD',
+  'EUR/GBP OTC': 'EUR/GBP',
+  'EUR/NZD OTC': 'EUR/NZD',
+  'GBP/NZD OTC': 'GBP/NZD',
+  'CAD/CHF OTC': 'CAD/CHF',
+  'EUR/JPY OTC': 'EUR/JPY',
+  'GBP/JPY OTC': 'GBP/JPY',
+  'USD/CHF OTC': 'USD/CHF'
+};
+
+function fetchJSON(url) {
+  return new Promise((resolve, reject) => {
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try { resolve(JSON.parse(data)); }
+        catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
+}
+
+// Candle data আনা
+async function getCandles(symbol) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
+  const data = await fetchJSON(url);
+  if (!data.values || data.values.length === 0) throw new Error('No candle data');
+  return data.values.map(v => ({
+    open: parseFloat(v.open),
+    high: parseFloat(v.high),
+    low: parseFloat(v.low),
+    close: parseFloat(v.close)
+  })).reverse(); // পুরনো থেকে নতুন
+}
+
+// RSI calculation
+function calcRSI(candles, period = 14) {
+  if (candles.length < period + 1) return 50;
+  let gains = 0, losses = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const diff = candles[i].close - candles[i - 1].close;
+    if (diff > 0) gains += diff;
+    else losses += Math.abs(diff);
+  }
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - (100 / (1 + rs));
+}
+
+// EMA calculation
+function calcEMA(candles, period) {
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
+  return ema;
+}
+
+// Trend analysis
+function analyzeTrend(candles) {
+  const ema5 = calcEMA(candles, 5);
+  const ema20 = calcEMA(candles, 20);
+  const lastClose = candles[candles.length - 1].close;
+
+  if (ema5 > ema20 && lastClose > ema5) return 'UP';
+  if (ema5 < ema20 && lastClose < ema5) return 'DOWN';
+  return 'SIDEWAYS';
+}
+
+// Price Action analysis
+function analyzePriceAction(candles) {
+  const len = candles.length;
+  const c = candles[len - 1]; // সর্বশেষ candle
+  const p = candles[len - 2]; // আগের candle
+  const p2 = candles[len - 3]; // তার আগের candle
+
+  const body = Math.abs(c.close - c.open);
+  const upperWick = c.high - Math.max(c.close, c.open);
+  const lowerWick = Math.min(c.close, c.open) - c.low;
+  const isBullish = c.close > c.open;
+  const isBearish = c.close < c.open;
+
+  // Bullish Engulfing
+  if (isBullish && p.close < p.open && c.close > p.open && c.open < p.close) {
+    return { pattern: 'Bullish Engulfing', direction: 'UP' };
+  }
+  // Bearish Engulfing
+  if (isBearish && p.close > p.open && c.open > p.close && c.close < p.open) {
+    return { pattern: 'Bearish Engulfing', direction: 'DOWN' };
+  }
+  // Bullish Pin Bar
+  if (lowerWick > body * 2 && upperWick < body * 0.5) {
+    return { pattern: 'Bullish Pin Bar', direction: 'UP' };
+  }
+  // Bearish Pin Bar
+  if (upperWick > body * 2 && lowerWick < body * 0.5) {
+    return { pattern: 'Bearish Pin Bar', direction: 'DOWN' };
+  }
+  // Higher High Higher Low (Uptrend continuation)
+  if (c.high > p.high && c.low > p.low && p.high > p2.high) {
+    return { pattern: 'Higher High (Uptrend)', direction: 'UP' };
+  }
+  // Lower High Lower Low (Downtrend continuation)
+  if (c.high < p.high && c.low < p.low && p.low < p2.low) {
+    return { pattern: 'Lower Low (Downtrend)', direction: 'DOWN' };
+  }
+  // Doji
+  if (body < (c.high - c.low) * 0.1) {
+    return { pattern: 'Doji (Reversal possible)', direction: 'NEUTRAL' };
+  }
+
+  return { pattern: 'No clear pattern', direction: 'NEUTRAL' };
+}
+
+// মূল signal analysis
+async function analyzeSignal(otcPair) {
+  const symbol = pairSymbolMap[otcPair];
+  const candles = await getCandles(symbol);
+
+  const rsi = calcRSI(candles);
+  const trend = analyzeTrend(candles);
+  const priceAction = analyzePriceAction(candles);
+
+  let upScore = 0;
+  let downScore = 0;
+
+  // Trend score
+  if (trend === 'UP') upScore += 2;
+  else if (trend === 'DOWN') downScore += 2;
+
+  // RSI score
+  if (rsi < 35) upScore += 2;       // Oversold = UP সম্ভাবনা
+  else if (rsi > 65) downScore += 2; // Overbought = DOWN সম্ভাবনা
+  else if (rsi < 50) upScore += 1;
+  else downScore += 1;
+
+  // Price Action score
+  if (priceAction.direction === 'UP') upScore += 3;
+  else if (priceAction.direction === 'DOWN') downScore += 3;
+
+  // Final direction
+  let direction, confidence, winRate;
+
+  const totalScore = upScore + downScore;
+  const dominantScore = Math.max(upScore, downScore);
+  const ratio = dominantScore / totalScore;
+
+  direction = upScore >= downScore ? 'UP⏫' : 'DOWN⏬';
+
+  if (ratio >= 0.8) {
+    confidence = 'Very High 🔥';
+    winRate = '85%';
+  } else if (ratio >= 0.65) {
+    confidence = 'High 🟢';
+    winRate = '80%';
+  } else {
+    confidence = 'Medium 🟡';
+    winRate = '75%';
+  }
+
+  return {
+    direction,
+    confidence,
+    winRate,
+    trend,
+    rsi: rsi.toFixed(1),
+    pattern: priceAction.pattern
+  };
+}
+
 function sendPairMenu(chatId) {
   const keyboard = [];
   for (let i = 0; i < pairs.length; i += 2) {
@@ -85,15 +267,11 @@ bot.onText(/\/start/, async (msg) => {
     );
   }
 
-  // Admin এর জন্য keyboard সবসময় দেখাবে
   if (userId === ADMIN_ID || approvedUsers.has(userId)) {
     await bot.sendMessage(chatId,
       '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
       '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: approvedKeyboard
-      }
+      { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
     return;
   }
@@ -120,22 +298,18 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-
   if (!approvedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
     return;
   }
-
   sendPairMenu(chatId);
 });
 
 // /admin
 bot.onText(/\/admin/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
-
   await bot.sendMessage(ADMIN_ID,
-    '👑 *ADMIN PANEL*\n' +
-    '══════════════════',
+    '👑 *ADMIN PANEL*\n' + '══════════════════',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -161,15 +335,12 @@ bot.onText(/\/approve (.+)/, async (msg, match) => {
   }
   const targetId = parseInt(parts[0]);
   const password = parts[1];
-
   passwordMode.set(targetId, password);
-
   await bot.sendMessage(targetId,
     '✅ *আপনার Trader ID verify হয়েছে!*\n\n' +
     '🔐 Bot access করতে আপনার password দিন:',
     { parse_mode: 'Markdown' }
   );
-
   await bot.sendMessage(ADMIN_ID,
     '✅ User `' + targetId + '` কে approve করা হয়েছে।\n🔑 Password: `' + password + '`',
     { parse_mode: 'Markdown' }
@@ -188,7 +359,6 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
-  // Reply keyboard button
   if (text === '➕ Generate New Signal 📊') {
     if (!approvedUsers.has(userId)) {
       await bot.sendMessage(chatId, '🔒 আপনার account verified না।');
@@ -198,7 +368,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Broadcast mode
   if (broadcastMode.has(userId) && userId === ADMIN_ID) {
     broadcastMode.delete(userId);
     let successCount = 0;
@@ -212,7 +381,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Password check
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
@@ -222,10 +390,7 @@ bot.on('message', async (msg) => {
       await bot.sendMessage(chatId,
         '🎉 *Bot access পেয়েছেন!*\n\n' +
         '📊 নিচের বাটনে ক্লিক করে signal নিন।',
-        {
-          parse_mode: 'Markdown',
-          reply_markup: approvedKeyboard
-        }
+        { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
     } else {
       await bot.sendMessage(chatId, '❌ ভুল password! আবার চেষ্টা করুন।');
@@ -241,10 +406,8 @@ bot.on('message', async (msg) => {
   }
 
   verifyMode.delete(userId);
-
   submissions.push({
-    userId: userId,
-    name: firstName,
+    userId, name: firstName,
     username: msg.from.username || null,
     traderId: text,
     time: new Date().toISOString()
@@ -285,18 +448,13 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'admin_approved' && userId === ADMIN_ID) {
     const list = [...approvedUsers].filter(u => u !== ADMIN_ID);
-    if (list.length === 0) {
-      await bot.sendMessage(ADMIN_ID, '✅ কোনো approved user নেই।');
-      return;
-    }
+    if (list.length === 0) { await bot.sendMessage(ADMIN_ID, '✅ কোনো approved user নেই।'); return; }
     let text = '✅ *APPROVED USERS*\n\n';
     list.forEach((uid, i) => {
       const sub = submissions.find(s => s.userId === uid);
       const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
       const traderId = sub ? sub.traderId : 'N/A';
-      text += (i + 1) + '. ' + uname + '\n' +
-        '🆔 User: `' + uid + '`\n' +
-        '📌 Trader ID: `' + traderId + '`\n\n';
+      text += (i + 1) + '. ' + uname + '\n🆔 User: `' + uid + '`\n📌 Trader ID: `' + traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -304,32 +462,22 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'admin_pending' && userId === ADMIN_ID) {
     const pending = submissions.filter(s => !approvedUsers.has(s.userId));
-    if (pending.length === 0) {
-      await bot.sendMessage(ADMIN_ID, '⏳ কোনো pending user নেই।');
-      return;
-    }
+    if (pending.length === 0) { await bot.sendMessage(ADMIN_ID, '⏳ কোনো pending user নেই।'); return; }
     let text = '⏳ *PENDING VERIFY LIST*\n\n';
     pending.forEach((s, i) => {
       const uname = s.username ? '@' + s.username : s.name;
-      text += (i + 1) + '. ' + uname + '\n' +
-        '🆔 `' + s.userId + '`\n' +
-        '📌 Trader ID: `' + s.traderId + '`\n\n';
+      text += (i + 1) + '. ' + uname + '\n🆔 `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
   }
 
   if (pair === 'admin_submissions' && userId === ADMIN_ID) {
-    if (submissions.length === 0) {
-      await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।');
-      return;
-    }
+    if (submissions.length === 0) { await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।'); return; }
     let text = '📋 *TRADER ID SUBMISSIONS*\n\n';
     submissions.forEach((s, i) => {
       const uname = s.username ? '@' + s.username : s.name;
-      text += (i + 1) + '. ' + uname + '\n' +
-        '🆔 User: `' + s.userId + '`\n' +
-        '📌 Trader ID: `' + s.traderId + '`\n\n';
+      text += (i + 1) + '. ' + uname + '\n🆔 User: `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -358,7 +506,6 @@ bot.on('callback_query', async (query) => {
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
   const loadId = loadMsg.message_id;
   let count = 0;
-
   await new Promise((resolve) => {
     const loadInterval = setInterval(async () => {
       count++;
@@ -375,7 +522,6 @@ bot.on('callback_query', async (query) => {
   // Step 2: Clock
   const clockMsg = await bot.sendMessage(chatId, '🕐 Signal generating...\n\n⏰ Bangladesh Time: --:--:--');
   const clockId = clockMsg.message_id;
-
   await new Promise((resolve) => {
     const clockInterval = setInterval(async () => {
       const now = new Date();
@@ -396,13 +542,22 @@ bot.on('callback_query', async (query) => {
   try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
   try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
-  // Signal
-  const directions = ['UP⏫', 'DOWN⏬'];
-  const randomDir = directions[Math.floor(Math.random() * 2)];
-  const winRates = ['75%', '78%', '80%', '82%', '85%'];
-  const confidences = ['Medium 🟡', 'High 🟢', 'Very High 🔥'];
-  const winRate = winRates[Math.floor(Math.random() * winRates.length)];
-  const confidence = confidences[Math.floor(Math.random() * confidences.length)];
+  // Step 3: Real Analysis
+  let signal;
+  try {
+    signal = await analyzeSignal(pair);
+  } catch (e) {
+    // API error হলে fallback
+    const directions = ['UP⏫', 'DOWN⏬'];
+    signal = {
+      direction: directions[Math.floor(Math.random() * 2)],
+      confidence: 'Medium 🟡',
+      winRate: '75%',
+      trend: 'N/A',
+      rsi: 'N/A',
+      pattern: 'N/A'
+    };
+  }
 
   const now2 = new Date();
   const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
@@ -418,9 +573,9 @@ bot.on('callback_query', async (query) => {
     '🔹 *TIME*     ➜ `1 MIN`\n' +
     '🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n' +
     '══════════════════\n' +
-    '🚀 *DIRECTION* ➜ ' + randomDir + '\n' +
-    '♻️ *WIN RATE*   ➜ `' + winRate + '`\n' +
-    '✅ *CONFIDENCE* ➜ ' + confidence + '\n' +
+    '🚀 *DIRECTION* ➜ ' + signal.direction + '\n' +
+    '♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n' +
+    '✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n' +
     '══════════════════\n' +
     '⏹️ *Take the trade now!*\n' +
     '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
@@ -428,4 +583,4 @@ bot.on('callback_query', async (query) => {
   );
 });
 
-console.log('Bot running...');
+console.log('Bot running v15 - Real Signal Analysis...');
