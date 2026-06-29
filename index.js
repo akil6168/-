@@ -54,9 +54,11 @@ const approvedKeyboard = {
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
-  'AUD/USD OTC', 'EUR/GBP OTC', 'EUR/NZD OTC',
-  'GBP/NZD OTC', 'CAD/CHF OTC', 'EUR/JPY OTC',
-  'GBP/JPY OTC', 'USD/CHF OTC'
+  'AUD/USD OTC', 'USD/CAD OTC', 'EUR/GBP OTC',
+  'EUR/NZD OTC', 'GBP/NZD OTC', 'USD/PKR OTC',
+  'USD/INR OTC', 'USD/BDT OTC', 'USD/IDR OTC',
+  'CAD/CHF OTC', 'EUR/JPY OTC', 'GBP/JPY OTC',
+  'USD/CHF OTC'
 ];
 
 // OTC pair -> Twelve Data symbol map
@@ -65,9 +67,14 @@ const pairSymbolMap = {
   'GBP/USD OTC': 'GBP/USD',
   'USD/JPY OTC': 'USD/JPY',
   'AUD/USD OTC': 'AUD/USD',
+  'USD/CAD OTC': 'USD/CAD',
   'EUR/GBP OTC': 'EUR/GBP',
   'EUR/NZD OTC': 'EUR/NZD',
   'GBP/NZD OTC': 'GBP/NZD',
+  'USD/PKR OTC': 'USD/PKR',
+  'USD/INR OTC': 'USD/INR',
+  'USD/BDT OTC': 'USD/BDT',
+  'USD/IDR OTC': 'USD/IDR',
   'CAD/CHF OTC': 'CAD/CHF',
   'EUR/JPY OTC': 'EUR/JPY',
   'GBP/JPY OTC': 'GBP/JPY',
