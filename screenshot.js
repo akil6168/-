@@ -205,16 +205,32 @@ function parseGeminiResponse(text) {
   const result = {};
   const lines = text.split('\n');
   lines.forEach(line => {
-    if (line.startsWith('DIRECTION:')) result.direction = line.split(':')[1].trim();
-    if (line.startsWith('WIN_RATE:')) result.winRate = line.split(':')[1].trim();
-    if (line.startsWith('CONFIDENCE:')) result.confidence = line.split(':')[1].trim();
-    if (line.startsWith('PATTERN:')) result.pattern = line.split(':')[1].trim();
-    if (line.startsWith('TREND:')) result.trend = line.split(':')[1].trim();
-    if (line.startsWith('KEY_LEVEL:')) result.keyLevel = line.split(':').slice(1).join(':').trim();
-    if (line.startsWith('MOMENTUM:')) result.momentum = line.split(':')[1].trim();
-    if (line.startsWith('REASON:')) result.reason = line.split(':').slice(1).join(':').trim();
-    if (line.startsWith('CONFLUENCE:')) result.confluence = line.split(':')[1].trim();
+    const lower = line.toLowerCase();
+    if (lower.includes('direction:')) result.direction = line.split(':').slice(1).join(':').trim().toUpperCase().includes('UP') ? 'UP' : 'DOWN';
+    if (lower.includes('win_rate:') || lower.includes('win rate:')) result.winRate = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('confidence:')) result.confidence = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('pattern:')) result.pattern = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('trend:')) result.trend = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('key_level:') || lower.includes('key level:')) result.keyLevel = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('momentum:')) result.momentum = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('reason:')) result.reason = line.split(':').slice(1).join(':').trim();
+    if (lower.includes('confluence:')) result.confluence = line.split(':').slice(1).join(':').trim();
   });
+
+  // Fallback: raw text থেকে direction বের করো
+  if (!result.direction) {
+    if (text.toUpperCase().includes('BULLISH') || text.toUpperCase().includes('UP')) {
+      result.direction = 'UP';
+    } else if (text.toUpperCase().includes('BEARISH') || text.toUpperCase().includes('DOWN')) {
+      result.direction = 'DOWN';
+    }
+  }
+
+  // Raw text save করো reason হিসেবে
+  if (!result.reason || result.reason === '') {
+    result.reason = text.replace(/\n/g, ' ').substring(0, 200);
+  }
+
   return result;
 }
 
