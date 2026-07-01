@@ -823,7 +823,7 @@ bot.on('callback_query', async (query) => {
     { parse_mode: 'Markdown' }
   );
 });
-
+require('./screenshot')(bot, db, approvedUsers, bannedUsers);
 // DB connect হলেই bot start
 connectDB().then(() => {
   console.log('Bot running v18 - Maintenance Mode Added...');
