@@ -140,6 +140,7 @@ REASON: Price rejected key resistance with bearish engulfing and strong downward
         try {
           const json = JSON.parse(data);
           const text = json.candidates[0].content.parts[0].text;
+          console.log('GEMINI RAW:', text);
           resolve(text);
         } catch (e) {
           reject(e);
