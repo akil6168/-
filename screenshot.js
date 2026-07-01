@@ -94,15 +94,14 @@ IMPORTANT DECISION:
 - If ${t1} candle signal is unclear or risky, choose ${t2}, ${t3}, or ${t5}
 - Only give signal when confluence is strong
 
-Reply in EXACTLY this format, no asterisks, no markdown symbols, no extra text:
-DIRECTION: UP
-WIN_RATE: 80%
-CONFIDENCE: High
+You MUST reply with ALL 7 lines below, nothing else:
+DIRECTION: UP or DOWN
+WIN_RATE: 75% or 80% or 85%
+CONFIDENCE: Medium or High or Very High
 ENTRY: ${t1}
 EXPIRY: ${t2}
-TREND: Downtrend Strong
-REASON: Price rejected key resistance with bearish engulfing and strong downward momentum`;
-
+TREND: write trend here
+REASON: write one line reason here`;
     const body = JSON.stringify({
       contents: [{
         parts: [
@@ -116,10 +115,8 @@ REASON: Price rejected key resistance with bearish engulfing and strong downward
         ]
       }],
       generationConfig: {
-        temperature: 0.1,
-        topK: 1,
-        topP: 0.8,
-        maxOutputTokens: 300
+  temperature: 0.2,
+  maxOutputTokens: 1024
       }
     });
 
