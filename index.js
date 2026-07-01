@@ -1,4 +1,4 @@
-// v17 - MongoDB + All Updates
+// v18 - MongoDB + Maintenance Mode
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const https = require('https');
@@ -9,6 +9,8 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 
 const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = '3d31d53eb903483fb33d6854db50e0fd';
+
+let maintenanceMode = false;
 
 let startedUsers = new Set();
 let approvedUsers = new Set([ADMIN_ID]);
@@ -238,11 +240,65 @@ function sendPairMenu(chatId) {
   });
 }
 
+// /maintenance
+bot.onText(/\/maintenance (.+)/, async (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  const action = match[1].trim().toLowerCase();
+
+  if (action === 'on') {
+    maintenanceMode = true;
+    await bot.sendMessage(ADMIN_ID,
+      '🔧 *Maintenance Mode চালু হয়েছে!*\n\n' +
+      '⛔ সব user এর access বন্ধ।',
+      { parse_mode: 'Markdown' }
+    );
+    // সব user কে notify করো
+    for (const uid of startedUsers) {
+      if (uid === ADMIN_ID) continue;
+      try {
+        await bot.sendMessage(uid,
+          '🔧 *Bot Maintenance চলছে...*\n\n' +
+          '⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e) {}
+    }
+  } else if (action === 'off') {
+    maintenanceMode = false;
+    await bot.sendMessage(ADMIN_ID,
+      '✅ *Maintenance Mode বন্ধ হয়েছে!*\n\n' +
+      '🚀 Bot আবার চালু আছে।',
+      { parse_mode: 'Markdown' }
+    );
+    // সব user কে notify করো
+    for (const uid of startedUsers) {
+      if (uid === ADMIN_ID) continue;
+      try {
+        await bot.sendMessage(uid,
+          '✅ *Bot আবার চালু হয়েছে!*\n\n' +
+          '📊 Signal নিতে নিচের বাটনে ক্লিক করুন।',
+          { parse_mode: 'Markdown' }
+        );
+      } catch (e) {}
+    }
+  } else {
+    await bot.sendMessage(ADMIN_ID, '❌ Format: /maintenance on অথবা /maintenance off');
+  }
+});
+
 // /start
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name || 'User';
   const userId = msg.from.id;
+
+  if (userId !== ADMIN_ID && maintenanceMode) {
+    await bot.sendMessage(chatId,
+      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
 
   if (bannedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে। Bot use করতে পারবেন না।');
@@ -294,6 +350,10 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  if (userId !== ADMIN_ID && maintenanceMode) {
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ অপেক্ষা করুন।', { parse_mode: 'Markdown' });
+    return;
+  }
   if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।'); return; }
   if (!approvedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
@@ -305,8 +365,11 @@ bot.onText(/\/menu/, async (msg) => {
 // /admin
 bot.onText(/\/admin/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
+  const status = maintenanceMode ? '🔧 ON' : '✅ OFF';
   await bot.sendMessage(ADMIN_ID,
-    '👑 *ADMIN PANEL*\n' + '══════════════════',
+    '👑 *ADMIN PANEL*\n' +
+    '══════════════════\n' +
+    '🔧 Maintenance: ' + status,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -318,7 +381,8 @@ bot.onText(/\/admin/, async (msg) => {
           [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }],
           [{ text: '❌ Unapprove User', callback_data: 'admin_unapprove_prompt' }],
           [{ text: '🚫 Ban User', callback_data: 'admin_ban_prompt' }],
-          [{ text: '✅ Unban User', callback_data: 'admin_unban_prompt' }]
+          [{ text: '✅ Unban User', callback_data: 'admin_unban_prompt' }],
+          [{ text: maintenanceMode ? '✅ Maintenance OFF' : '🔧 Maintenance ON', callback_data: 'admin_maintenance' }]
         ]
       }
     }
@@ -397,6 +461,14 @@ bot.on('message', async (msg) => {
     : '[' + firstName + '](tg://user?id=' + userId + ')';
 
   if (!text || text.startsWith('/')) return;
+
+  if (userId !== ADMIN_ID && maintenanceMode) {
+    await bot.sendMessage(chatId,
+      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
 
   if (userId !== ADMIN_ID && bannedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।');
@@ -516,6 +588,46 @@ bot.on('callback_query', async (query) => {
   const userId = query.from.id;
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
+
+  if (userId !== ADMIN_ID && maintenanceMode) {
+    await bot.sendMessage(chatId,
+      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  // Maintenance toggle from admin panel
+  if (pair === 'admin_maintenance' && userId === ADMIN_ID) {
+    maintenanceMode = !maintenanceMode;
+    const status = maintenanceMode ? 'চালু 🔧' : 'বন্ধ ✅';
+    await bot.sendMessage(ADMIN_ID,
+      '🔧 *Maintenance Mode ' + status + ' হয়েছে!*',
+      { parse_mode: 'Markdown' }
+    );
+    if (maintenanceMode) {
+      for (const uid of startedUsers) {
+        if (uid === ADMIN_ID) continue;
+        try {
+          await bot.sendMessage(uid,
+            '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
+      }
+    } else {
+      for (const uid of startedUsers) {
+        if (uid === ADMIN_ID) continue;
+        try {
+          await bot.sendMessage(uid,
+            '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
+      }
+    }
+    return;
+  }
 
   if (pair === 'admin_total' && userId === ADMIN_ID) {
     await bot.sendMessage(ADMIN_ID,
@@ -714,7 +826,7 @@ bot.on('callback_query', async (query) => {
 
 // DB connect হলেই bot start
 connectDB().then(() => {
-  console.log('Bot running v17 - MongoDB + All Updates...');
+  console.log('Bot running v18 - Maintenance Mode Added...');
   bot.startPolling();
 }).catch(err => {
   console.error('MongoDB connection failed:', err);
