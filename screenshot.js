@@ -248,14 +248,14 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
     }
 
     const count = getUserCount(userId);
-    if (count >= DAILY_LIMIT) {
-      await bot.sendMessage(chatId,
-        '📊 আজকের AI analysis শেষ!\n\n' +
-        '➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
-        { parse_mode: 'Markdown' }
-      );
-      return;
-    }
+if (count >= DAILY_LIMIT && userId !== 5724602667) {
+  await bot.sendMessage(chatId,
+'📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n' +
+'➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
+    { parse_mode: 'Markdown' }
+  );
+  return;
+}
 
     // Entry/Expiry calculate করো আগেই
     const { entry, expiry } = getEntryExpiry();
