@@ -5,12 +5,11 @@ const https = require('https');
 
 const TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
-const bot = new TelegramBot(TOKEN, { polling: true });
+const bot = new TelegramBot(TOKEN, { polling: false });
 
 const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = '3d31d53eb903483fb33d6854db50e0fd';
 
-// In-memory sets (MongoDB থেকে load হবে)
 let startedUsers = new Set();
 let approvedUsers = new Set([ADMIN_ID]);
 let bannedUsers = new Set();
@@ -23,7 +22,6 @@ const banMode = new Set();
 const unbanMode = new Set();
 const unapproveMode = new Set();
 
-// MongoDB
 let db;
 async function connectDB() {
   const client = new MongoClient(MONGO_URI);
@@ -31,7 +29,6 @@ async function connectDB() {
   db = client.db('qxbot');
   console.log('MongoDB connected!');
 
-  // Load data
   const su = await db.collection('startedUsers').find().toArray();
   su.forEach(u => startedUsers.add(u.userId));
 
@@ -81,7 +78,6 @@ async function addSubmission(data) {
   await db.collection('submissions').insertOne(data);
 }
 
-// Auto API KEY generator
 function generateApiKey() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
   let part1 = '';
@@ -329,7 +325,7 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// /approve (auto API KEY)
+// /approve
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
@@ -359,10 +355,7 @@ bot.onText(/\/unapprove (.+)/, async (msg, match) => {
   if (targetId === ADMIN_ID) { await bot.sendMessage(ADMIN_ID, '❌ Admin কে unapprove করা যাবে না।'); return; }
   await removeApprovedUser(targetId);
   passwordMode.delete(targetId);
-  await bot.sendMessage(ADMIN_ID,
-    '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`',
-    { parse_mode: 'Markdown' }
-  );
+  await bot.sendMessage(ADMIN_ID, '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
   try { await bot.sendMessage(targetId, '⛔ আপনার bot access বাতিল করা হয়েছে।\n\n✅ পুনরায় verify করতে /start দিন।'); } catch (e) {}
 });
 
@@ -375,10 +368,7 @@ bot.onText(/\/ban (.+)/, async (msg, match) => {
   await addBannedUser(targetId);
   await removeApprovedUser(targetId);
   passwordMode.delete(targetId);
-  await bot.sendMessage(ADMIN_ID,
-    '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`',
-    { parse_mode: 'Markdown' }
-  );
+  await bot.sendMessage(ADMIN_ID, '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
   try { await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।'); } catch (e) {}
 });
 
@@ -392,10 +382,7 @@ bot.onText(/\/unban (.+)/, async (msg, match) => {
     return;
   }
   await removeBannedUser(targetId);
-  await bot.sendMessage(ADMIN_ID,
-    '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`',
-    { parse_mode: 'Markdown' }
-  );
+  await bot.sendMessage(ADMIN_ID, '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
   try { await bot.sendMessage(targetId, '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'); } catch (e) {}
 });
 
@@ -518,8 +505,8 @@ bot.on('message', async (msg) => {
 
   await bot.sendMessage(chatId,
     '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n' +
-    '⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔'
-    , { parse_mode: 'Markdown' }
+    '⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔',
+    { parse_mode: 'Markdown' }
   );
 });
 
@@ -725,9 +712,11 @@ bot.on('callback_query', async (query) => {
   );
 });
 
-// Start
+// DB connect হলেই bot start
 connectDB().then(() => {
   console.log('Bot running v17 - MongoDB + All Updates...');
+  bot.startPolling();
 }).catch(err => {
   console.error('MongoDB connection failed:', err);
+  process.exit(1);
 });
