@@ -1,4 +1,4 @@
-// screenshot.js - Deep AI Chart Analysis v2
+// screenshot.js - Final Fixed Version
 const https = require('https');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -30,21 +30,17 @@ function getBDTime() {
   const h = String(bd.getUTCHours()).padStart(2, '0');
   const m = String(bd.getUTCMinutes()).padStart(2, '0');
   const s = String(bd.getUTCSeconds()).padStart(2, '0');
-  return { h, m, s, bd };
+  return { h, m, s };
 }
 
 function getSecondsUntilNext50() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-  const currentSeconds = bd.getUTCSeconds();
-  if (currentSeconds < 50) {
-    return 50 - currentSeconds;
-  } else {
-    return (60 - currentSeconds) + 50;
-  }
+  const s = bd.getUTCSeconds();
+  return s < 50 ? 50 - s : (60 - s) + 50;
 }
 
-function getCurrentBDMinuteHour() {
+function getCurrentBDTime() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
   return {
@@ -54,69 +50,54 @@ function getCurrentBDMinuteHour() {
   };
 }
 
-async function analyzeChartWithGemini(imageBase64, mimeType, currentHour, currentMinute, currentSecond) {
-  return new Promise((resolve, reject) => {
+function formatTime(h, m) {
+  const nm = m % 60;
+  const nh = h + Math.floor(m / 60);
+  return String(nh % 24).padStart(2, '0') + ':' + String(nm).padStart(2, '0');
+}
 
-    // Signal কোন মিনিটে দেওয়া উচিত সেটা Gemini decide করবে
-    const nextMinute = currentSecond < 50 ? currentMinute + 1 : currentMinute + 2;
-    const nextMinute2 = nextMinute + 1;
-    const nextMinute3 = nextMinute + 2;
-    const nextMinute5 = nextMinute + 4;
+async function analyzeChartWithGemini(imageBase64, hour, minute, second) {
+  const nextMinute = second < 50 ? minute + 1 : minute + 2;
+  const t1 = formatTime(hour, nextMinute);
+  const t2 = formatTime(hour, nextMinute + 1);
+  const t3 = formatTime(hour, nextMinute + 2);
+  const t5 = formatTime(hour, nextMinute + 4);
 
-    const formatTime = (h, m) => {
-      const nm = m % 60;
-      const nh = h + Math.floor(m / 60);
-      return String(nh).padStart(2, '0') + ':' + String(nm).padStart(2, '0');
-    };
+  const prompt = `You are a professional binary options trader. Analyze this OTC chart screenshot carefully.
 
-    const t1 = formatTime(currentHour, nextMinute);
-    const t2 = formatTime(currentHour, nextMinute2);
-    const t3 = formatTime(currentHour, nextMinute3);
-    const t5 = formatTime(currentHour, nextMinute5);
+Current BD Time: ${String(hour).padStart(2,'0')}:${String(minute).padStart(2,'0')}:${String(second).padStart(2,'0')}
 
-    const prompt = `You are a professional binary options trader with 20 years of experience analyzing OTC charts.
+Analyze these factors:
+1. Last 5 candlestick patterns (Doji, Hammer, Engulfing, Pin Bar)
+2. Overall trend direction and strength
+3. Price action and key levels
+4. Support and resistance zones
+5. Momentum and reversal signals
+6. Candle body vs wick ratio
 
-Current BD Time: ${String(currentHour).padStart(2,'0')}:${String(currentMinute).padStart(2,'0')}:${String(currentSecond).padStart(2,'0')}
+Available entry times: ${t1}, ${t2}, ${t3}, ${t5}
+Choose the BEST entry where signal is STRONGEST.
 
-Analyze this trading chart screenshot with full depth:
-
-1. CANDLESTICK PATTERNS - Last 5 candles behavior, identify: Doji, Hammer, Engulfing, Pin Bar, Marubozu, Star patterns
-2. TREND - Overall direction, strength, EMA crossover if visible, Higher Highs/Lows pattern
-3. PRICE ACTION - Key levels being tested, Break of structure, rejection candles
-4. SUPPORT/RESISTANCE - Key levels, is price at a critical zone?
-5. MOMENTUM - Is it increasing or decreasing? Signs of exhaustion?
-6. CANDLE BODY/WICK - Body vs wick ratio, rejection wicks, full body momentum candles
-7. REVERSAL SIGNALS - Exhaustion, failed breakouts, climax candles
-
-IMPORTANT DECISION:
-- Available entry times: ${t1}, ${t2}, ${t3}, or ${t5}
-- Choose the BEST entry time where you are MOST CONFIDENT
-- If ${t1} candle signal is unclear or risky, choose ${t2}, ${t3}, or ${t5}
-- Only give signal when confluence is strong
-
-You MUST reply with ALL 7 lines below, nothing else:
+IMPORTANT: You MUST write exactly these 7 lines and nothing else:
 DIRECTION: UP or DOWN
 WIN_RATE: 75% or 80% or 85%
 CONFIDENCE: Medium or High or Very High
-ENTRY: ${t1}
-EXPIRY: ${t2}
-TREND: write trend here
-REASON: write one line reason here`;
+ENTRY: chosen time
+EXPIRY: one minute after entry
+TREND: describe trend in 3 words
+REASON: one sentence explanation`;
+
+  return new Promise((resolve, reject) => {
     const body = JSON.stringify({
       contents: [{
         parts: [
-          {
-            inline_data: {
-              mime_type: mimeType,
-              data: imageBase64
-            }
-          },
+          { inline_data: { mime_type: 'image/jpeg', data: imageBase64 } },
           { text: prompt }
         ]
       }],
       generationConfig: {
-  temperature: 0.2,
-  maxOutputTokens: 1024
+        temperature: 0.2,
+        maxOutputTokens: 512
       }
     });
 
@@ -137,9 +118,11 @@ REASON: write one line reason here`;
         try {
           const json = JSON.parse(data);
           const text = json.candidates[0].content.parts[0].text;
-          console.log('GEMINI RAW:', text);
+          console.log('GEMINI RAW:\n' + text);
           resolve(text);
         } catch (e) {
+          console.log('GEMINI PARSE ERROR:', e.message);
+          console.log('RAW DATA:', data);
           reject(e);
         }
       });
@@ -152,51 +135,56 @@ REASON: write one line reason here`;
 }
 
 function parseGeminiResponse(text) {
-  const result = {};
+  const result = {
+    direction: null,
+    winRate: '75%',
+    confidence: 'Medium',
+    entry: null,
+    expiry: null,
+    trend: 'N/A',
+    reason: 'AI analysis based signal'
+  };
+
   const lines = text.split('\n');
-  lines.forEach(line => {
-    const trimmed = line.replace(/\*/g, '').replace(/#/g, '').trim();
-    const lower = trimmed.toLowerCase();
+  for (const line of lines) {
+    const clean = line.replace(/\*/g, '').replace(/#/g, '').trim();
+    const lower = clean.toLowerCase();
 
     if (lower.startsWith('direction:')) {
-      const val = trimmed.split(':').slice(1).join(':').trim().toUpperCase();
-      result.direction = val.includes('UP') ? 'UP' : val.includes('DOWN') ? 'DOWN' : null;
+      const val = clean.substring(clean.indexOf(':') + 1).trim().toUpperCase();
+      if (val.includes('UP')) result.direction = 'UP';
+      else if (val.includes('DOWN')) result.direction = 'DOWN';
     }
-    if (lower.startsWith('win_rate:') || lower.startsWith('win rate:')) {
-      result.winRate = trimmed.split(':').slice(1).join(':').trim();
+    else if (lower.startsWith('win_rate:') || lower.startsWith('win rate:')) {
+      result.winRate = clean.substring(clean.indexOf(':') + 1).trim();
     }
-    if (lower.startsWith('confidence:')) {
-      result.confidence = trimmed.split(':').slice(1).join(':').trim();
+    else if (lower.startsWith('confidence:')) {
+      result.confidence = clean.substring(clean.indexOf(':') + 1).trim();
     }
-    if (lower.startsWith('entry:')) {
-      result.entry = trimmed.split(':').slice(1).join(':').trim();
+    else if (lower.startsWith('entry:')) {
+      result.entry = clean.substring(clean.indexOf(':') + 1).trim();
     }
-    if (lower.startsWith('expiry:')) {
-      result.expiry = trimmed.split(':').slice(1).join(':').trim();
+    else if (lower.startsWith('expiry:')) {
+      result.expiry = clean.substring(clean.indexOf(':') + 1).trim();
     }
-    if (lower.startsWith('trend:')) {
-      result.trend = trimmed.split(':').slice(1).join(':').trim();
+    else if (lower.startsWith('trend:')) {
+      result.trend = clean.substring(clean.indexOf(':') + 1).trim();
     }
-    if (lower.startsWith('reason:')) {
-      result.reason = trimmed.split(':').slice(1).join(':').trim();
-    }
-  });
-
-  // Fallback direction
-  if (!result.direction) {
-    const upper = text.toUpperCase();
-    if (upper.includes('BULLISH') || upper.includes('BUY') || upper.includes(' UP')) {
-      result.direction = 'UP';
-    } else if (upper.includes('BEARISH') || upper.includes('SELL') || upper.includes(' DOWN')) {
-      result.direction = 'DOWN';
-    } else {
-      result.direction = 'N/A';
+    else if (lower.startsWith('reason:')) {
+      result.reason = clean.substring(clean.indexOf(':') + 1).trim();
     }
   }
 
-  // Fallback reason
-  if (!result.reason) {
-    result.reason = text.replace(/\n/g, ' ').replace(/\*/g, '').substring(0, 150).trim();
+  // Direction fallback
+  if (!result.direction) {
+    const upper = text.toUpperCase();
+    if (upper.includes('BULLISH') || upper.includes(' UP ') || upper.includes('BUY')) {
+      result.direction = 'UP';
+    } else if (upper.includes('BEARISH') || upper.includes(' DOWN ') || upper.includes('SELL')) {
+      result.direction = 'DOWN';
+    } else {
+      result.direction = 'UP'; // default
+    }
   }
 
   return result;
@@ -211,7 +199,9 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
     if (bannedUsers.has(userId)) return;
 
     if (!approvedUsers.has(userId)) {
-      await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
+      await bot.sendMessage(chatId,
+        '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start'
+      );
       return;
     }
 
@@ -226,16 +216,18 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
     }
 
     const waitSeconds = getSecondsUntilNext50();
-    const { hour, minute, second } = getCurrentBDMinuteHour();
+    const { hour, minute, second } = getCurrentBDTime();
 
+    // Loading message
     const loadMsg = await bot.sendMessage(chatId,
       '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
       '⏰ Signal দেওয়া হবে: *' + waitSeconds + ' seconds* পরে\n\n' +
-      '📊 Analyzing: Candlestick + Trend + Price Action\n' +
-      'Support/Resistance + Momentum + Volume...',
+      '🔍 Candlestick • Trend • Price Action\n' +
+      '📈 Support/Resistance • Momentum',
       { parse_mode: 'Markdown' }
     );
 
+    // Countdown
     let remaining = waitSeconds;
     const countdownInterval = setInterval(async () => {
       remaining--;
@@ -247,8 +239,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
           '⏳ Signal আসছে: *' + remaining + ' seconds* পরে\n\n' +
           '🔍 Analyzing deeply...\n' +
           '📊 Candlestick • Trend • Price Action\n' +
-          '📈 Support/Resistance • Momentum\n' +
-          '🕯️ Body/Wick Ratio • Reversal Signals',
+          '📈 Support/Resistance • Momentum',
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
@@ -256,6 +247,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
     }, 1000);
 
     try {
+      // Download image
       const photos = msg.photo;
       const photo = photos[photos.length - 1];
       const file = await bot.getFile(photo.file_id);
@@ -272,25 +264,25 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
 
       const imageBase64 = imageData.toString('base64');
 
-      // Gemini analysis background এ চলবে
-      const geminiPromise = analyzeChartWithGemini(imageBase64, 'image/jpeg', hour, minute, second);
+      // Gemini background এ চলবে
+      const geminiPromise = analyzeChartWithGemini(imageBase64, hour, minute, second);
 
-      // :50 second পর্যন্ত অপেক্ষা
+      // :50 পর্যন্ত অপেক্ষা
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
-
       clearInterval(countdownInterval);
 
+      // Result নাও
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
 
       incrementUserCount(userId);
-      const remaining2 = DAILY_LIMIT - getUserCount(userId);
+      const remainingCount = DAILY_LIMIT - getUserCount(userId);
 
-      const dirEmoji = signal.direction === 'UP' ? '⏫' : signal.direction === 'DOWN' ? '⏬' : '';
-
+      const dirEmoji = signal.direction === 'UP' ? '⏫' : '⏬';
       let confEmoji = '🟡';
-      if (signal.confidence && signal.confidence.toLowerCase().includes('high') && !signal.confidence.toLowerCase().includes('very')) confEmoji = '🟢';
-      if (signal.confidence && signal.confidence.toLowerCase().includes('very')) confEmoji = '🔥';
+      const confLower = (signal.confidence || '').toLowerCase();
+      if (confLower.includes('very')) confEmoji = '🔥';
+      else if (confLower.includes('high')) confEmoji = '🟢';
 
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
@@ -298,23 +290,24 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
         '╭──────────────────╮\n' +
         '│  🧠 *AI Deep Chart Analysis*\n' +
         '╰──────────────────╯\n\n' +
-        '🚀 *DIRECTION* ➜ ' + (signal.direction || 'N/A') + ' ' + dirEmoji + '\n' +
+        '🚀 *DIRECTION* ➜ ' + signal.direction + ' ' + dirEmoji + '\n' +
         '📊 *ENTRY*        ➜ `' + (signal.entry || 'N/A') + '`\n' +
         '⏱ *EXPIRY*      ➜ `' + (signal.expiry || 'N/A') + '`\n' +
         '══════════════════\n' +
-        '♻️ *WIN RATE*    ➜ `' + (signal.winRate || '75%') + '`\n' +
-        '✅ *CONFIDENCE* ➜ ' + (signal.confidence || 'Medium') + ' ' + confEmoji + '\n' +
-        '🔀 *TREND*        ➜ `' + (signal.trend || 'N/A') + '`\n' +
+        '♻️ *WIN RATE*    ➜ `' + signal.winRate + '`\n' +
+        '✅ *CONFIDENCE* ➜ ' + signal.confidence + ' ' + confEmoji + '\n' +
+        '🔀 *TREND*        ➜ `' + signal.trend + '`\n' +
         '══════════════════\n' +
-        '💡 _' + (signal.reason || 'AI analysis based signal') + '_\n' +
+        '💡 _' + signal.reason + '_\n' +
         '══════════════════\n' +
-        '📊 Remaining analysis today: *' + remaining2 + '/' + DAILY_LIMIT + '*\n' +
+        '📊 Remaining analysis today: *' + remainingCount + '/' + DAILY_LIMIT + '*\n' +
         '⚠️ _Trade at your own risk_ ⚠️',
         { parse_mode: 'Markdown' }
       );
 
     } catch (e) {
       clearInterval(countdownInterval);
+      console.log('SCREENSHOT ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
       await bot.sendMessage(chatId,
         '❌ Analysis failed!\n\n➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
