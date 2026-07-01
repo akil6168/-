@@ -1,8 +1,9 @@
-// screenshot.js - Deep AI Chart Analysis
+// screenshot.js - Deep AI Chart Analysis v2
 const https = require('https');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const DAILY_LIMIT = 5;
+const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
 
@@ -23,7 +24,6 @@ function incrementUserCount(userId) {
   userScreenshotCount.set(key, current + 1);
 }
 
-// BD Time
 function getBDTime() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
@@ -33,122 +33,75 @@ function getBDTime() {
   return { h, m, s, bd };
 }
 
-// পরের মিনিটের :50 second কত সেকেন্ড বাকি
 function getSecondsUntilNext50() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
   const currentSeconds = bd.getUTCSeconds();
-
   if (currentSeconds < 50) {
     return 50 - currentSeconds;
   } else {
-    // পরের মিনিটের :50
     return (60 - currentSeconds) + 50;
   }
 }
 
-// Entry ও Expiry time calculate
-function getEntryExpiry() {
+function getCurrentBDMinuteHour() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-  const currentSeconds = bd.getUTCSeconds();
-
-  let entryMinute, expiryMinute;
-  const currentMinute = bd.getUTCMinutes();
-  const currentHour = bd.getUTCHours();
-
-  if (currentSeconds < 50) {
-    // এই মিনিটের :50 এ signal → পরের মিনিটে entry
-    entryMinute = currentMinute + 1;
-  } else {
-    // পরের মিনিটের :50 এ signal → তার পরের মিনিটে entry
-    entryMinute = currentMinute + 2;
-  }
-
-  expiryMinute = entryMinute + 1;
-
-  const entryH = String(currentHour + Math.floor(entryMinute / 60)).padStart(2, '0');
-  const entryM = String(entryMinute % 60).padStart(2, '0');
-  const expiryH = String(currentHour + Math.floor(expiryMinute / 60)).padStart(2, '0');
-  const expiryM = String(expiryMinute % 60).padStart(2, '0');
-
   return {
-    entry: entryH + ':' + entryM,
-    expiry: expiryH + ':' + expiryM
+    hour: bd.getUTCHours(),
+    minute: bd.getUTCMinutes(),
+    second: bd.getUTCSeconds()
   };
 }
 
-// Gemini Deep Analysis
-async function analyzeChartWithGemini(imageBase64, mimeType) {
+async function analyzeChartWithGemini(imageBase64, mimeType, currentHour, currentMinute, currentSecond) {
   return new Promise((resolve, reject) => {
-    const prompt = `You are a professional forex and binary options trader with 20 years of experience. Analyze this trading chart screenshot with EXTREME detail and precision.
 
-Perform ALL of the following analyses:
+    // Signal কোন মিনিটে দেওয়া উচিত সেটা Gemini decide করবে
+    const nextMinute = currentSecond < 50 ? currentMinute + 1 : currentMinute + 2;
+    const nextMinute2 = nextMinute + 1;
+    const nextMinute3 = nextMinute + 2;
+    const nextMinute5 = nextMinute + 4;
 
-1. CANDLESTICK PATTERNS:
-   - Identify: Doji, Hammer, Shooting Star, Engulfing (Bullish/Bearish), Pin Bar, Morning/Evening Star, Harami, Tweezer, Marubozu, Spinning Top, Three White Soldiers, Three Black Crows
-   - Note the last 3-5 candles behavior
+    const formatTime = (h, m) => {
+      const nm = m % 60;
+      const nh = h + Math.floor(m / 60);
+      return String(nh).padStart(2, '0') + ':' + String(nm).padStart(2, '0');
+    };
 
-2. TREND ANALYSIS:
-   - Overall trend direction (Uptrend/Downtrend/Sideways)
-   - EMA crossover signals if visible
-   - Higher Highs/Higher Lows or Lower Highs/Lower Lows pattern
-   - Trend strength (Strong/Moderate/Weak)
+    const t1 = formatTime(currentHour, nextMinute);
+    const t2 = formatTime(currentHour, nextMinute2);
+    const t3 = formatTime(currentHour, nextMinute3);
+    const t5 = formatTime(currentHour, nextMinute5);
 
-3. PRICE ACTION:
-   - Key price levels being tested
-   - Break of structure (BOS)
-   - Change of character (CHOCH)
-   - Fair Value Gaps if visible
-   - Order blocks if visible
+    const prompt = `You are a professional binary options trader with 20 years of experience analyzing OTC charts.
 
-4. SUPPORT & RESISTANCE:
-   - Identify key support levels
-   - Identify key resistance levels
-   - Is price at a key level right now?
-   - Previous support turned resistance or vice versa
+Current BD Time: ${String(currentHour).padStart(2,'0')}:${String(currentMinute).padStart(2,'0')}:${String(currentSecond).padStart(2,'0')}
 
-5. MARKET MOMENTUM:
-   - Is momentum increasing or decreasing?
-   - Momentum divergence if visible
-   - Speed of price movement
+Analyze this trading chart screenshot with full depth:
 
-6. CANDLE BODY/WICK ANALYSIS:
-   - Body size vs wick ratio of last candles
-   - Long upper/lower wicks indicating rejection
-   - Full body candles indicating strong momentum
+1. CANDLESTICK PATTERNS - Last 5 candles behavior, identify: Doji, Hammer, Engulfing, Pin Bar, Marubozu, Star patterns
+2. TREND - Overall direction, strength, EMA crossover if visible, Higher Highs/Lows pattern
+3. PRICE ACTION - Key levels being tested, Break of structure, rejection candles
+4. SUPPORT/RESISTANCE - Key levels, is price at a critical zone?
+5. MOMENTUM - Is it increasing or decreasing? Signs of exhaustion?
+6. CANDLE BODY/WICK - Body vs wick ratio, rejection wicks, full body momentum candles
+7. REVERSAL SIGNALS - Exhaustion, failed breakouts, climax candles
 
-7. VOLUME REACTION (if visible):
-   - High/Low volume on moves
-   - Volume confirmation of trend
+IMPORTANT DECISION:
+- Available entry times: ${t1}, ${t2}, ${t3}, or ${t5}
+- Choose the BEST entry time where you are MOST CONFIDENT
+- If ${t1} candle signal is unclear or risky, choose ${t2}, ${t3}, or ${t5}
+- Only give signal when confluence is strong
 
-8. MARKET STRUCTURE:
-   - Consolidation zones
-   - Breakout or breakdown levels
-   - Range boundaries
-
-9. REVERSAL SIGNALS:
-   - Exhaustion signs
-   - Climax candles
-   - Failed breakouts
-
-10. OVERALL CONFLUENCE:
-    - How many factors align for UP?
-    - How many factors align for DOWN?
-    - Which direction has stronger confluence?
-
-Based on ALL above analysis, give your BEST trading signal.
-
-Reply ONLY in this EXACT format (no extra text):
-DIRECTION: UP or DOWN
-WIN_RATE: 75% or 80% or 85%
-CONFIDENCE: Medium or High or Very High
-PATTERN: (main pattern detected)
-TREND: (trend direction and strength)
-KEY_LEVEL: (key price level being tested)
-MOMENTUM: (momentum description)
-REASON: (2-3 line detailed explanation)
-CONFLUENCE: (number of factors supporting the signal out of 10)`;
+Reply in EXACTLY this format, no asterisks, no markdown symbols, no extra text:
+DIRECTION: UP
+WIN_RATE: 80%
+CONFIDENCE: High
+ENTRY: ${t1}
+EXPIRY: ${t2}
+TREND: Downtrend Strong
+REASON: Price rejected key resistance with bearish engulfing and strong downward momentum`;
 
     const body = JSON.stringify({
       contents: [{
@@ -166,7 +119,7 @@ CONFLUENCE: (number of factors supporting the signal out of 10)`;
         temperature: 0.1,
         topK: 1,
         topP: 0.8,
-        maxOutputTokens: 500
+        maxOutputTokens: 300
       }
     });
 
@@ -200,35 +153,52 @@ CONFLUENCE: (number of factors supporting the signal out of 10)`;
   });
 }
 
-// Parse Gemini response
 function parseGeminiResponse(text) {
   const result = {};
   const lines = text.split('\n');
   lines.forEach(line => {
-    const lower = line.toLowerCase();
-    if (lower.includes('direction:')) result.direction = line.split(':').slice(1).join(':').trim().toUpperCase().includes('UP') ? 'UP' : 'DOWN';
-    if (lower.includes('win_rate:') || lower.includes('win rate:')) result.winRate = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('confidence:')) result.confidence = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('pattern:')) result.pattern = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('trend:')) result.trend = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('key_level:') || lower.includes('key level:')) result.keyLevel = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('momentum:')) result.momentum = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('reason:')) result.reason = line.split(':').slice(1).join(':').trim();
-    if (lower.includes('confluence:')) result.confluence = line.split(':').slice(1).join(':').trim();
+    const trimmed = line.replace(/\*/g, '').replace(/#/g, '').trim();
+    const lower = trimmed.toLowerCase();
+
+    if (lower.startsWith('direction:')) {
+      const val = trimmed.split(':').slice(1).join(':').trim().toUpperCase();
+      result.direction = val.includes('UP') ? 'UP' : val.includes('DOWN') ? 'DOWN' : null;
+    }
+    if (lower.startsWith('win_rate:') || lower.startsWith('win rate:')) {
+      result.winRate = trimmed.split(':').slice(1).join(':').trim();
+    }
+    if (lower.startsWith('confidence:')) {
+      result.confidence = trimmed.split(':').slice(1).join(':').trim();
+    }
+    if (lower.startsWith('entry:')) {
+      result.entry = trimmed.split(':').slice(1).join(':').trim();
+    }
+    if (lower.startsWith('expiry:')) {
+      result.expiry = trimmed.split(':').slice(1).join(':').trim();
+    }
+    if (lower.startsWith('trend:')) {
+      result.trend = trimmed.split(':').slice(1).join(':').trim();
+    }
+    if (lower.startsWith('reason:')) {
+      result.reason = trimmed.split(':').slice(1).join(':').trim();
+    }
   });
 
-  // Fallback: raw text থেকে direction বের করো
+  // Fallback direction
   if (!result.direction) {
-    if (text.toUpperCase().includes('BULLISH') || text.toUpperCase().includes('UP')) {
+    const upper = text.toUpperCase();
+    if (upper.includes('BULLISH') || upper.includes('BUY') || upper.includes(' UP')) {
       result.direction = 'UP';
-    } else if (text.toUpperCase().includes('BEARISH') || text.toUpperCase().includes('DOWN')) {
+    } else if (upper.includes('BEARISH') || upper.includes('SELL') || upper.includes(' DOWN')) {
       result.direction = 'DOWN';
+    } else {
+      result.direction = 'N/A';
     }
   }
 
-  // Raw text save করো reason হিসেবে
-  if (!result.reason || result.reason === '') {
-    result.reason = text.replace(/\n/g, ' ').substring(0, 200);
+  // Fallback reason
+  if (!result.reason) {
+    result.reason = text.replace(/\n/g, ' ').replace(/\*/g, '').substring(0, 150).trim();
   }
 
   return result;
@@ -248,20 +218,18 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
     }
 
     const count = getUserCount(userId);
-if (count >= DAILY_LIMIT && userId !== 5724602667) {
-  await bot.sendMessage(chatId,
-'📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n' +
-'➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
-    { parse_mode: 'Markdown' }
-  );
-  return;
-}
+    if (count >= DAILY_LIMIT && userId !== ADMIN_ID) {
+      await bot.sendMessage(chatId,
+        '📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n' +
+        '➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
 
-    // Entry/Expiry calculate করো আগেই
-    const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
+    const { hour, minute, second } = getCurrentBDMinuteHour();
 
-    // Loading message
     const loadMsg = await bot.sendMessage(chatId,
       '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
       '⏰ Signal দেওয়া হবে: *' + waitSeconds + ' seconds* পরে\n\n' +
@@ -270,7 +238,6 @@ if (count >= DAILY_LIMIT && userId !== 5724602667) {
       { parse_mode: 'Markdown' }
     );
 
-    // Real-time countdown
     let remaining = waitSeconds;
     const countdownInterval = setInterval(async () => {
       remaining--;
@@ -283,18 +250,14 @@ if (count >= DAILY_LIMIT && userId !== 5724602667) {
           '🔍 Analyzing deeply...\n' +
           '📊 Candlestick • Trend • Price Action\n' +
           '📈 Support/Resistance • Momentum\n' +
-          '🕯️ Volume • Body/Wick Ratio',
+          '🕯️ Body/Wick Ratio • Reversal Signals',
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
-
-      if (remaining <= 0) {
-        clearInterval(countdownInterval);
-      }
+      if (remaining <= 0) clearInterval(countdownInterval);
     }, 1000);
 
     try {
-      // Image download
       const photos = msg.photo;
       const photo = photos[photos.length - 1];
       const file = await bot.getFile(photo.file_id);
@@ -311,54 +274,43 @@ if (count >= DAILY_LIMIT && userId !== 5724602667) {
 
       const imageBase64 = imageData.toString('base64');
 
-      // Gemini analysis (background এ চলবে)
-      const geminiPromise = analyzeChartWithGemini(imageBase64, 'image/jpeg');
+      // Gemini analysis background এ চলবে
+      const geminiPromise = analyzeChartWithGemini(imageBase64, 'image/jpeg', hour, minute, second);
 
       // :50 second পর্যন্ত অপেক্ষা
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
 
-      // Countdown বন্ধ করো
       clearInterval(countdownInterval);
 
-      // Gemini result নাও
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
 
-      // Count বাড়াও
       incrementUserCount(userId);
       const remaining2 = DAILY_LIMIT - getUserCount(userId);
 
-      // Direction emoji
-      const dirEmoji = signal.direction === 'UP' ? '⏫' : '⏬';
+      const dirEmoji = signal.direction === 'UP' ? '⏫' : signal.direction === 'DOWN' ? '⏬' : '';
 
-      // Confidence emoji
       let confEmoji = '🟡';
-      if (signal.confidence === 'High') confEmoji = '🟢';
-      if (signal.confidence === 'Very High') confEmoji = '🔥';
+      if (signal.confidence && signal.confidence.toLowerCase().includes('high') && !signal.confidence.toLowerCase().includes('very')) confEmoji = '🟢';
+      if (signal.confidence && signal.confidence.toLowerCase().includes('very')) confEmoji = '🔥';
 
-      // Delete loading message
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
-      // Signal পাঠাও
       await bot.sendMessage(chatId,
         '╭──────────────────╮\n' +
         '│  🧠 *AI Deep Chart Analysis*\n' +
         '╰──────────────────╯\n\n' +
         '🚀 *DIRECTION* ➜ ' + (signal.direction || 'N/A') + ' ' + dirEmoji + '\n' +
-        '📊 *ENTRY*        ➜ `' + entry + '`\n' +
-        '⏱ *EXPIRY*      ➜ `' + expiry + '`\n' +
+        '📊 *ENTRY*        ➜ `' + (signal.entry || 'N/A') + '`\n' +
+        '⏱ *EXPIRY*      ➜ `' + (signal.expiry || 'N/A') + '`\n' +
         '══════════════════\n' +
         '♻️ *WIN RATE*    ➜ `' + (signal.winRate || '75%') + '`\n' +
         '✅ *CONFIDENCE* ➜ ' + (signal.confidence || 'Medium') + ' ' + confEmoji + '\n' +
-        '📈 *PATTERN*     ➜ `' + (signal.pattern || 'N/A') + '`\n' +
         '🔀 *TREND*        ➜ `' + (signal.trend || 'N/A') + '`\n' +
-        '⚡ *MOMENTUM*  ➜ `' + (signal.momentum || 'N/A') + '`\n' +
-        '🎯 *KEY LEVEL*  ➜ `' + (signal.keyLevel || 'N/A') + '`\n' +
-        '🔗 *CONFLUENCE* ➜ `' + (signal.confluence || 'N/A') + '`\n' +
         '══════════════════\n' +
         '💡 _' + (signal.reason || 'AI analysis based signal') + '_\n' +
         '══════════════════\n' +
-        '📊 আজকের বাকি analysis: *' + remaining2 + '/' + DAILY_LIMIT + '*\n' +
+        '📊 Remaining analysis today: *' + remaining2 + '/' + DAILY_LIMIT + '*\n' +
         '⚠️ _Trade at your own risk_ ⚠️',
         { parse_mode: 'Markdown' }
       );
