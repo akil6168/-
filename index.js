@@ -1,70 +1,98 @@
-// v16 - Admin Panel with Ban/Unban/Unapprove
+// v17 - MongoDB + All Updates
 const TelegramBot = require('node-telegram-bot-api');
-const fs = require('fs');
+const { MongoClient } = require('mongodb');
 const https = require('https');
+
 const TOKEN = process.env.BOT_TOKEN;
+const MONGO_URI = process.env.MONGO_URI;
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = '3d31d53eb903483fb33d6854db50e0fd';
 
+// In-memory sets (MongoDB থেকে load হবে)
+let startedUsers = new Set();
+let approvedUsers = new Set([ADMIN_ID]);
+let bannedUsers = new Set();
+let submissions = [];
+
 const verifyMode = new Set();
 const passwordMode = new Map();
-const approvedUsers = new Set([ADMIN_ID]);
 const broadcastMode = new Set();
-const bannedUsers = new Set();
-
-// Admin action modes
 const banMode = new Set();
 const unbanMode = new Set();
 const unapproveMode = new Set();
 
-const STARTED_FILE = 'started_users.json';
-const APPROVED_FILE = 'approved_users.json';
-const SUBMISSIONS_FILE = 'submissions.json';
-const BANNED_FILE = 'banned_users.json';
+// MongoDB
+let db;
+async function connectDB() {
+  const client = new MongoClient(MONGO_URI);
+  await client.connect();
+  db = client.db('qxbot');
+  console.log('MongoDB connected!');
 
-let startedUsers = new Set();
-if (fs.existsSync(STARTED_FILE)) {
-  try { startedUsers = new Set(JSON.parse(fs.readFileSync(STARTED_FILE, 'utf8'))); } catch (e) {}
-}
+  // Load data
+  const su = await db.collection('startedUsers').find().toArray();
+  su.forEach(u => startedUsers.add(u.userId));
 
-if (fs.existsSync(APPROVED_FILE)) {
-  try {
-    const data = JSON.parse(fs.readFileSync(APPROVED_FILE, 'utf8'));
-    data.forEach(u => approvedUsers.add(u));
-  } catch (e) {}
-}
+  const au = await db.collection('approvedUsers').find().toArray();
+  au.forEach(u => approvedUsers.add(u.userId));
 
-if (fs.existsSync(BANNED_FILE)) {
-  try {
-    const data = JSON.parse(fs.readFileSync(BANNED_FILE, 'utf8'));
-    data.forEach(u => bannedUsers.add(u));
-  } catch (e) {}
+  const bu = await db.collection('bannedUsers').find().toArray();
+  bu.forEach(u => bannedUsers.add(u.userId));
+
+  const subs = await db.collection('submissions').find().toArray();
+  submissions = subs;
 }
 
-let submissions = [];
-if (fs.existsSync(SUBMISSIONS_FILE)) {
-  try { submissions = JSON.parse(fs.readFileSync(SUBMISSIONS_FILE, 'utf8')); } catch (e) {}
+async function addStartedUser(userId) {
+  startedUsers.add(userId);
+  await db.collection('startedUsers').updateOne(
+    { userId }, { $set: { userId } }, { upsert: true }
+  );
 }
 
-function saveStartedUsers() {
-  fs.writeFileSync(STARTED_FILE, JSON.stringify([...startedUsers]));
+async function addApprovedUser(userId) {
+  approvedUsers.add(userId);
+  await db.collection('approvedUsers').updateOne(
+    { userId }, { $set: { userId } }, { upsert: true }
+  );
 }
-function saveApprovedUsers() {
-  fs.writeFileSync(APPROVED_FILE, JSON.stringify([...approvedUsers]));
+
+async function removeApprovedUser(userId) {
+  approvedUsers.delete(userId);
+  await db.collection('approvedUsers').deleteOne({ userId });
 }
-function saveSubmissions() {
-  fs.writeFileSync(SUBMISSIONS_FILE, JSON.stringify(submissions));
+
+async function addBannedUser(userId) {
+  bannedUsers.add(userId);
+  await db.collection('bannedUsers').updateOne(
+    { userId }, { $set: { userId } }, { upsert: true }
+  );
 }
-function saveBannedUsers() {
-  fs.writeFileSync(BANNED_FILE, JSON.stringify([...bannedUsers]));
+
+async function removeBannedUser(userId) {
+  bannedUsers.delete(userId);
+  await db.collection('bannedUsers').deleteOne({ userId });
+}
+
+async function addSubmission(data) {
+  submissions.push(data);
+  await db.collection('submissions').insertOne(data);
+}
+
+// Auto API KEY generator
+function generateApiKey() {
+  const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+  let part1 = '';
+  let part2 = '';
+  for (let i = 0; i < 2; i++) part1 += chars[Math.floor(Math.random() * chars.length)];
+  for (let i = 0; i < 4; i++) part2 += chars[Math.floor(Math.random() * chars.length)];
+  return `QX_${part1}${part2}_XAAN`;
 }
 
 const approvedKeyboard = {
-  keyboard: [
-    [{ text: '➕ Generate New Signal 📊' }]
-  ],
+  keyboard: [[{ text: '➕ Generate New Signal 📊' }]],
   resize_keyboard: true,
   persistent: true
 };
@@ -79,22 +107,14 @@ const pairs = [
 ];
 
 const pairSymbolMap = {
-  'EUR/USD OTC': 'EUR/USD',
-  'GBP/USD OTC': 'GBP/USD',
-  'USD/JPY OTC': 'USD/JPY',
-  'AUD/USD OTC': 'AUD/USD',
-  'USD/CAD OTC': 'USD/CAD',
-  'EUR/GBP OTC': 'EUR/GBP',
-  'EUR/NZD OTC': 'EUR/NZD',
-  'GBP/NZD OTC': 'GBP/NZD',
-  'USD/PKR OTC': 'USD/PKR',
-  'USD/INR OTC': 'USD/INR',
-  'USD/BDT OTC': 'USD/BDT',
-  'USD/IDR OTC': 'USD/IDR',
-  'CAD/CHF OTC': 'CAD/CHF',
-  'EUR/JPY OTC': 'EUR/JPY',
-  'GBP/JPY OTC': 'GBP/JPY',
-  'USD/CHF OTC': 'USD/CHF'
+  'EUR/USD OTC': 'EUR/USD', 'GBP/USD OTC': 'GBP/USD',
+  'USD/JPY OTC': 'USD/JPY', 'AUD/USD OTC': 'AUD/USD',
+  'USD/CAD OTC': 'USD/CAD', 'EUR/GBP OTC': 'EUR/GBP',
+  'EUR/NZD OTC': 'EUR/NZD', 'GBP/NZD OTC': 'GBP/NZD',
+  'USD/PKR OTC': 'USD/PKR', 'USD/INR OTC': 'USD/INR',
+  'USD/BDT OTC': 'USD/BDT', 'USD/IDR OTC': 'USD/IDR',
+  'CAD/CHF OTC': 'CAD/CHF', 'EUR/JPY OTC': 'EUR/JPY',
+  'GBP/JPY OTC': 'GBP/JPY', 'USD/CHF OTC': 'USD/CHF'
 };
 
 function fetchJSON(url) {
@@ -115,10 +135,8 @@ async function getCandles(symbol) {
   const data = await fetchJSON(url);
   if (!data.values || data.values.length === 0) throw new Error('No candle data');
   return data.values.map(v => ({
-    open: parseFloat(v.open),
-    high: parseFloat(v.high),
-    low: parseFloat(v.low),
-    close: parseFloat(v.close)
+    open: parseFloat(v.open), high: parseFloat(v.high),
+    low: parseFloat(v.low), close: parseFloat(v.close)
   })).reverse();
 }
 
@@ -133,8 +151,7 @@ function calcRSI(candles, period = 14) {
   const avgGain = gains / period;
   const avgLoss = losses / period;
   if (avgLoss === 0) return 100;
-  const rs = avgGain / avgLoss;
-  return 100 - (100 / (1 + rs));
+  return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
 function calcEMA(candles, period) {
@@ -160,7 +177,6 @@ function analyzePriceAction(candles) {
   const c = candles[len - 1];
   const p = candles[len - 2];
   const p2 = candles[len - 3];
-
   const body = Math.abs(c.close - c.open);
   const upperWick = c.high - Math.max(c.close, c.open);
   const lowerWick = Math.min(c.close, c.open) - c.low;
@@ -181,39 +197,32 @@ function analyzePriceAction(candles) {
     return { pattern: 'Lower Low (Downtrend)', direction: 'DOWN' };
   if (body < (c.high - c.low) * 0.1)
     return { pattern: 'Doji (Reversal possible)', direction: 'NEUTRAL' };
-
   return { pattern: 'No clear pattern', direction: 'NEUTRAL' };
 }
 
 async function analyzeSignal(otcPair) {
   const symbol = pairSymbolMap[otcPair];
   const candles = await getCandles(symbol);
-
   const rsi = calcRSI(candles);
   const trend = analyzeTrend(candles);
   const priceAction = analyzePriceAction(candles);
 
-  let upScore = 0;
-  let downScore = 0;
-
+  let upScore = 0, downScore = 0;
   if (trend === 'UP') upScore += 2;
   else if (trend === 'DOWN') downScore += 2;
-
   if (rsi < 35) upScore += 2;
   else if (rsi > 65) downScore += 2;
   else if (rsi < 50) upScore += 1;
   else downScore += 1;
-
   if (priceAction.direction === 'UP') upScore += 3;
   else if (priceAction.direction === 'DOWN') downScore += 3;
 
-  let direction, confidence, winRate;
   const totalScore = upScore + downScore;
   const dominantScore = Math.max(upScore, downScore);
   const ratio = dominantScore / totalScore;
+  const direction = upScore >= downScore ? 'UP⏫' : 'DOWN⏬';
 
-  direction = upScore >= downScore ? 'UP⏫' : 'DOWN⏬';
-
+  let confidence, winRate;
   if (ratio >= 0.8) { confidence = 'Very High 🔥'; winRate = '85%'; }
   else if (ratio >= 0.65) { confidence = 'High 🟢'; winRate = '80%'; }
   else { confidence = 'Medium 🟡'; winRate = '75%'; }
@@ -240,13 +249,12 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
 
   if (bannedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🚫 আপনি ban করা হয়েছেন। Bot use করতে পারবেন না।');
+    await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে। Bot use করতে পারবেন না।');
     return;
   }
 
   if (!startedUsers.has(userId)) {
-    startedUsers.add(userId);
-    saveStartedUsers();
+    await addStartedUser(userId);
     await bot.sendMessage(ADMIN_ID,
       '♻️ *NEW USER STARTED BOT* ➕\n\n' +
       '👤 Name: ' + firstName + '\n' +
@@ -257,7 +265,10 @@ bot.onText(/\/start/, async (msg) => {
 
   if (userId === ADMIN_ID || approvedUsers.has(userId)) {
     await bot.sendMessage(chatId,
-      '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
+      '⚡ *AI Signal System*\n' +
+      '📊 *নির্ভুল Trade Analysis*\n' +
+      '📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n' +
+      '👑 *Premium VIP সুবিধা*\n\n' +
       '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
@@ -265,11 +276,12 @@ bot.onText(/\/start/, async (msg) => {
   }
 
   await bot.sendMessage(chatId,
-    '👋 *Welcome to 𝗤𝘅_𝘅𝗮𝗮𝗻_𝗙𝗮𝘁𝗵𝗲𝗿_𝗯𝗼𝘁!* 🚀\n\n' +
-    '📈 Get full access to premium trading signals.\n\n' +
-    '🏆 Trade smarter with our advanced signal system.\n\n' +
-    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার 8-digit Trader ID পাঠান verification এর জন্য।\n\n' +
-    '✅ Access premium features after verification.',
+    '⚡ *AI Signal System*\n' +
+    '📊 *নির্ভুল Trade Analysis*\n' +
+    '📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n' +
+    '👑 *Premium VIP সুবিধা*\n\n' +
+    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n' +
+    '✅ Verify করলেই সব feature unlock হবে।',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -286,7 +298,7 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনি ban করা হয়েছেন।'); return; }
+  if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।'); return; }
   if (!approvedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
     return;
@@ -317,103 +329,74 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// /approve
+// /approve (auto API KEY)
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
-  const parts = match[1].split(' ');
-  if (parts.length < 2) {
-    await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id] [password]');
+  const targetId = parseInt(match[1].trim());
+  if (isNaN(targetId)) {
+    await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id]');
     return;
   }
-  const targetId = parseInt(parts[0]);
-  const password = parts[1];
-  passwordMode.set(targetId, password);
+  const apiKey = generateApiKey();
+  passwordMode.set(targetId, apiKey);
   await bot.sendMessage(targetId,
     '✅ *আপনার Trader ID verify হয়েছে!*\n\n' +
-    '🔐 Bot access করতে আপনার password দিন:',
+    '🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`',
     { parse_mode: 'Markdown' }
   );
   await bot.sendMessage(ADMIN_ID,
-    '✅ User `' + targetId + '` কে approve করা হয়েছে।\n🔑 Password: `' + password + '`',
+    '✅ *User `' + targetId + '` কে approve করা হয়েছে।*\n' +
+    '🔑 API KEY: `' + apiKey + '`',
     { parse_mode: 'Markdown' }
   );
 });
 
-// /unapprove command
+// /unapprove
 bot.onText(/\/unapprove (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
-  if (isNaN(targetId)) {
-    await bot.sendMessage(ADMIN_ID, '❌ Format: /unapprove [user_id]');
-    return;
-  }
-  if (targetId === ADMIN_ID) {
-    await bot.sendMessage(ADMIN_ID, '❌ Admin কে unapprove করা যাবে না।');
-    return;
-  }
-  approvedUsers.delete(targetId);
+  if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /unapprove [user_id]'); return; }
+  if (targetId === ADMIN_ID) { await bot.sendMessage(ADMIN_ID, '❌ Admin কে unapprove করা যাবে না।'); return; }
+  await removeApprovedUser(targetId);
   passwordMode.delete(targetId);
-  saveApprovedUsers();
   await bot.sendMessage(ADMIN_ID,
-    '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`\n⛔ এখন আর bot access নেই।',
+    '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`',
     { parse_mode: 'Markdown' }
   );
-  try {
-    await bot.sendMessage(targetId,
-      '⛔ আপনার bot access বাতিল করা হয়েছে।\n\n✅ পুনরায় verify করতে /start দিন।'
-    );
-  } catch (e) {}
+  try { await bot.sendMessage(targetId, '⛔ আপনার bot access বাতিল করা হয়েছে।\n\n✅ পুনরায় verify করতে /start দিন।'); } catch (e) {}
 });
 
-// /ban command
+// /ban
 bot.onText(/\/ban (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
-  if (isNaN(targetId)) {
-    await bot.sendMessage(ADMIN_ID, '❌ Format: /ban [user_id]');
-    return;
-  }
-  if (targetId === ADMIN_ID) {
-    await bot.sendMessage(ADMIN_ID, '❌ Admin কে ban করা যাবে না।');
-    return;
-  }
-  bannedUsers.add(targetId);
-  approvedUsers.delete(targetId);
+  if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /ban [user_id]'); return; }
+  if (targetId === ADMIN_ID) { await bot.sendMessage(ADMIN_ID, '❌ Admin কে ban করা যাবে না।'); return; }
+  await addBannedUser(targetId);
+  await removeApprovedUser(targetId);
   passwordMode.delete(targetId);
-  saveBannedUsers();
-  saveApprovedUsers();
   await bot.sendMessage(ADMIN_ID,
-    '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`\n⛔ সম্পূর্ণ bot access বন্ধ করা হয়েছে।',
+    '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`',
     { parse_mode: 'Markdown' }
   );
-  try {
-    await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।');
-  } catch (e) {}
+  try { await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।'); } catch (e) {}
 });
 
-// /unban command
+// /unban
 bot.onText(/\/unban (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
-  if (isNaN(targetId)) {
-    await bot.sendMessage(ADMIN_ID, '❌ Format: /unban [user_id]');
-    return;
-  }
+  if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /unban [user_id]'); return; }
   if (!bannedUsers.has(targetId)) {
     await bot.sendMessage(ADMIN_ID, '⚠️ User `' + targetId + '` ban list এ নেই।', { parse_mode: 'Markdown' });
     return;
   }
-  bannedUsers.delete(targetId);
-  saveBannedUsers();
+  await removeBannedUser(targetId);
   await bot.sendMessage(ADMIN_ID,
-    '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`\n✅ Ban তুলে নেওয়া হয়েছে।',
+    '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`',
     { parse_mode: 'Markdown' }
   );
-  try {
-    await bot.sendMessage(targetId,
-      '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'
-    );
-  } catch (e) {}
+  try { await bot.sendMessage(targetId, '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'); } catch (e) {}
 });
 
 // Message handler
@@ -428,9 +411,8 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
-  // Ban check (admin ছাড়া)
   if (userId !== ADMIN_ID && bannedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🚫 আপনি ban করা হয়েছেন। Bot use করতে পারবেন না।');
+    await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।');
     return;
   }
 
@@ -456,81 +438,42 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Admin: unapprove mode - user ID input
   if (unapproveMode.has(userId) && userId === ADMIN_ID) {
     unapproveMode.delete(userId);
     const targetId = parseInt(text.trim());
-    if (isNaN(targetId)) {
-      await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID। আবার চেষ্টা করুন।');
-      return;
-    }
-    if (targetId === ADMIN_ID) {
-      await bot.sendMessage(ADMIN_ID, '❌ Admin কে unapprove করা যাবে না।');
-      return;
-    }
-    approvedUsers.delete(targetId);
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+    if (targetId === ADMIN_ID) { await bot.sendMessage(ADMIN_ID, '❌ Admin কে unapprove করা যাবে না।'); return; }
+    await removeApprovedUser(targetId);
     passwordMode.delete(targetId);
-    saveApprovedUsers();
-    await bot.sendMessage(ADMIN_ID,
-      '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`\n⛔ এখন আর bot access নেই।',
-      { parse_mode: 'Markdown' }
-    );
-    try {
-      await bot.sendMessage(targetId,
-        '⛔ আপনার bot access বাতিল করা হয়েছে।\n\n✅ পুনরায় verify করতে /start দিন।'
-      );
-    } catch (e) {}
+    await bot.sendMessage(ADMIN_ID, '❌ *User Unapproved!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
+    try { await bot.sendMessage(targetId, '⛔ আপনার bot access বাতিল করা হয়েছে।\n\n✅ পুনরায় verify করতে /start দিন।'); } catch (e) {}
     return;
   }
 
-  // Admin: ban mode - user ID input
   if (banMode.has(userId) && userId === ADMIN_ID) {
     banMode.delete(userId);
     const targetId = parseInt(text.trim());
-    if (isNaN(targetId)) {
-      await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID। আবার চেষ্টা করুন।');
-      return;
-    }
-    if (targetId === ADMIN_ID) {
-      await bot.sendMessage(ADMIN_ID, '❌ Admin কে ban করা যাবে না।');
-      return;
-    }
-    bannedUsers.add(targetId);
-    approvedUsers.delete(targetId);
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+    if (targetId === ADMIN_ID) { await bot.sendMessage(ADMIN_ID, '❌ Admin কে ban করা যাবে না।'); return; }
+    await addBannedUser(targetId);
+    await removeApprovedUser(targetId);
     passwordMode.delete(targetId);
-    saveBannedUsers();
-    saveApprovedUsers();
-    await bot.sendMessage(ADMIN_ID,
-      '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`\n⛔ সম্পূর্ণ bot access বন্ধ।',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(ADMIN_ID, '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
     try { await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।'); } catch (e) {}
     return;
   }
 
-  // Admin: unban mode - user ID input
   if (unbanMode.has(userId) && userId === ADMIN_ID) {
     unbanMode.delete(userId);
     const targetId = parseInt(text.trim());
-    if (isNaN(targetId)) {
-      await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID। আবার চেষ্টা করুন।');
-      return;
-    }
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
     if (!bannedUsers.has(targetId)) {
-      await bot.sendMessage(ADMIN_ID, '⚠️ User `' + targetId + '` ban list এ নেই।', { parse_mode: 'Markdown' });
+      await bot.sendMessage(ADMIN_ID, '⚠️ User ban list এ নেই।');
       return;
     }
-    bannedUsers.delete(targetId);
-    saveBannedUsers();
-    await bot.sendMessage(ADMIN_ID,
-      '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`\n✅ Ban তুলে নেওয়া হয়েছে।',
-      { parse_mode: 'Markdown' }
-    );
-    try {
-      await bot.sendMessage(targetId,
-        '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'
-      );
-    } catch (e) {}
+    await removeBannedUser(targetId);
+    await bot.sendMessage(ADMIN_ID, '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
+    try { await bot.sendMessage(targetId, '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'); } catch (e) {}
     return;
   }
 
@@ -538,15 +481,13 @@ bot.on('message', async (msg) => {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
       passwordMode.delete(userId);
-      approvedUsers.add(userId);
-      saveApprovedUsers();
+      await addApprovedUser(userId);
       await bot.sendMessage(chatId,
-        '🎉 *Bot access পেয়েছেন!*\n\n' +
-        '📊 নিচের বাটনে ক্লিক করে signal নিন।',
+        '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
         { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
     } else {
-      await bot.sendMessage(chatId, '❌ ভুল password! আবার চেষ্টা করুন।');
+      await bot.sendMessage(chatId, '❌ ভুল API KEY! আবার চেষ্টা করুন।');
     }
     return;
   }
@@ -554,30 +495,31 @@ bot.on('message', async (msg) => {
   if (!verifyMode.has(userId)) return;
 
   if (!/^\d{8}$/.test(text)) {
-    await bot.sendMessage(chatId, '❌ ভুল Trader ID\n\n📌 সঠিক 8-digit Trader ID পাঠান।');
+    await bot.sendMessage(chatId, '❌ ভুল Trader ID\n\n🔐 আপনার 8-digit Quotex Trader ID পাঠান 👇');
     return;
   }
 
   verifyMode.delete(userId);
-  submissions.push({
+  await addSubmission({
     userId, name: firstName,
     username: msg.from.username || null,
     traderId: text,
     time: new Date().toISOString()
   });
-  saveSubmissions();
 
   await bot.sendMessage(ADMIN_ID,
     '🔔 *NEW TRADER ID SUBMISSION*\n\n' +
     '👤 Name: ' + username + '\n' +
     '🆔 User ID: `' + userId + '`\n' +
     '📌 Trader ID: `' + text + '`\n\n' +
-    '✅ Approve: `/approve ' + userId + ' [password]`',
+    '✅ Approve: `/approve ' + userId + '`',
     { parse_mode: 'Markdown' }
   );
 
   await bot.sendMessage(chatId,
-    '✅ আপনার Trader ID পাঠানো হয়েছে।\nAdmin verification এর জন্য অপেক্ষা করুন।'
+    '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n' +
+    '⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔'
+    , { parse_mode: 'Markdown' }
   );
 });
 
@@ -643,7 +585,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ===== NEW: Unapprove prompt =====
   if (pair === 'admin_unapprove_prompt' && userId === ADMIN_ID) {
     unapproveMode.add(ADMIN_ID);
     const list = [...approvedUsers].filter(u => u !== ADMIN_ID);
@@ -663,7 +604,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ===== NEW: Ban prompt =====
   if (pair === 'admin_ban_prompt' && userId === ADMIN_ID) {
     banMode.add(ADMIN_ID);
     const list = [...startedUsers].filter(u => u !== ADMIN_ID && !bannedUsers.has(u));
@@ -683,7 +623,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ===== NEW: Unban prompt =====
   if (pair === 'admin_unban_prompt' && userId === ADMIN_ID) {
     unbanMode.add(ADMIN_ID);
     const list = [...bannedUsers];
@@ -705,7 +644,7 @@ bot.on('callback_query', async (query) => {
 
   if (pair === '/verify') {
     verifyMode.add(userId);
-    await bot.sendMessage(chatId, '📌 আপনার 8-digit Quotex Trader ID পাঠান:');
+    await bot.sendMessage(chatId, '🔐 আপনার 8-digit Quotex Trader ID পাঠান 👇');
     return;
   }
 
@@ -723,10 +662,8 @@ bot.on('callback_query', async (query) => {
     const loadInterval = setInterval(async () => {
       count++;
       try {
-        await bot.editMessageText(
-          '⏳ Loading signal generation....\n\n' + count + ' / 100',
-          { chat_id: chatId, message_id: loadId }
-        );
+        await bot.editMessageText('⏳ Loading signal generation....\n\n' + count + ' / 100',
+          { chat_id: chatId, message_id: loadId });
       } catch (e) {}
       if (count >= 100) { clearInterval(loadInterval); resolve(); }
     }, 30);
@@ -742,10 +679,8 @@ bot.on('callback_query', async (query) => {
       const m = String(bd.getUTCMinutes()).padStart(2, '0');
       const s = String(bd.getUTCSeconds()).padStart(2, '0');
       try {
-        await bot.editMessageText(
-          '🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
-          { chat_id: chatId, message_id: clockId }
-        );
+        await bot.editMessageText('🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
+          { chat_id: chatId, message_id: clockId });
       } catch (e) {}
       if (bd.getUTCSeconds() === 58) { clearInterval(clockInterval); resolve(); }
     }, 1000);
@@ -761,11 +696,8 @@ bot.on('callback_query', async (query) => {
     const directions = ['UP⏫', 'DOWN⏬'];
     signal = {
       direction: directions[Math.floor(Math.random() * 2)],
-      confidence: 'Medium 🟡',
-      winRate: '75%',
-      trend: 'N/A',
-      rsi: 'N/A',
-      pattern: 'N/A'
+      confidence: 'Medium 🟡', winRate: '75%',
+      trend: 'N/A', rsi: 'N/A', pattern: 'N/A'
     };
   }
 
@@ -793,4 +725,9 @@ bot.on('callback_query', async (query) => {
   );
 });
 
-console.log('Bot running v16 - Ban/Unban/Unapprove Added...');
+// Start
+connectDB().then(() => {
+  console.log('Bot running v17 - MongoDB + All Updates...');
+}).catch(err => {
+  console.error('MongoDB connection failed:', err);
+});
