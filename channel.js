@@ -276,16 +276,16 @@ async function deepAnalyze(otcPair) {
 
   // ৩টা tier
   let confidence, winRate;
-  if (ratio >= 0.93) {
-    confidence = 'Very High Pro Max 🔥🔥🔥';
-    winRate = '93%';
-  } else if (ratio >= 0.87) {
-    confidence = 'Very High Pro 🔥🔥';
-    winRate = '88%';
-  } else {
+  if (ratio < 0.70) return null;
+
+  let confidence, winRate;
+  if (ratio >= 0.80) {
     confidence = 'Very High 🔥';
     winRate = '85%';
-  }
+  } else {
+    confidence = 'High 🟢';
+    winRate = '80%';
+      }
 
   const trendDesc = trend.trendDir === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
 
