@@ -263,11 +263,7 @@ async function deepAnalyze(otcPair) {
   const ratio = totalScore > 0 ? dominantScore / totalScore : 0;
   const direction = upScore >= downScore ? 'UP' : 'DOWN';
 
-  // শুধু Very High এবং উপরে পাঠাবে
-  if (ratio < 0.80) return null;
-
-  // ৩টা tier
-  let confidence, winRate;
+  // ৭০% এর নিচে হলে পাঠাবে না
   if (ratio < 0.70) return null;
 
   let confidence, winRate;
@@ -277,7 +273,7 @@ async function deepAnalyze(otcPair) {
   } else {
     confidence = 'High 🟢';
     winRate = '80%';
-      }
+  }
 
   const trendDesc = trend.trendDir === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
 
@@ -320,22 +316,19 @@ module.exports = function(bot) {
   console.log('Channel auto signal started!');
 
   let lastSentTime = 0;
-  const MIN_GAP = 3 * 60 * 1000;  // minimum 3 মিনিট
-  const MAX_GAP = 8 * 60 * 1000;  // maximum 8 মিনিট
-  let checkInterval = null;
+  const MIN_GAP = 3 * 60 * 1000;
+  const MAX_GAP = 8 * 60 * 1000;
 
   async function checkAndSendBestSignal() {
     const now = Date.now();
     const timeSinceLast = now - lastSentTime;
 
-    // minimum 3 মিনিট না হলে skip
     if (lastSentTime > 0 && timeSinceLast < MIN_GAP) return;
 
-    // maximum 8 মিনিট পার হলে যাই হোক check করবে
     const forceCheck = lastSentTime > 0 && timeSinceLast >= MAX_GAP;
 
     const { h, m } = getBDTime();
-    console.log('Scanning all pairs at BD Time: ' + h + ':' + m);
+    console.log('Scanning pairs at BD Time: ' + h + ':' + m);
 
     const results = [];
 
@@ -351,12 +344,10 @@ module.exports = function(bot) {
 
     if (results.length === 0) {
       console.log('No high accuracy signal found.');
-      // 8 মিনিট পার হলেও না পেলে lastSentTime reset
       if (forceCheck) lastSentTime = Date.now();
       return;
     }
 
-    // Score অনুযায়ী sort করে সেরাটা নাও
     results.sort((a, b) => b.ratio - a.ratio || b.totalScore - a.totalScore);
     const best = results[0];
 
@@ -384,9 +375,8 @@ module.exports = function(bot) {
     lastSentTime = Date.now();
   }
 
-  // প্রতি 1 মিনিটে check করবে
   setTimeout(() => {
     checkAndSendBestSignal();
-    checkInterval = setInterval(checkAndSendBestSignal, 60 * 1000);
+    setInterval(checkAndSendBestSignal, 60 * 1000);
   }, 30000);
 };
