@@ -411,7 +411,7 @@ module.exports = function(bot) {
             '🔀 *TREND* ➜ `' + result.trend + '`\n' +
             '🔗 *SIGNALS* ➜ `' + result.signals + '`\n' +
             '━━━━━━━━━━━━━━━━━━\n' +
-            '⚠️ _Trade at your own risk_ ⚠️',
+            '⚠️ Trade at your own risk if loss use 1 stet MTG ⚠️',
             { parse_mode: 'Markdown' }
           );
 
