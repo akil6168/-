@@ -1,4 +1,4 @@
-// screenshot.js - Maximum Deep Analysis
+// screenshot.js - Maximum Deep Analysis + Chart Check
 const https = require('https');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -73,9 +73,18 @@ async function analyzeChartWithGemini(imageBase64) {
             }
           },
           {
-            text: `You are a world-class professional binary options and forex trader with 20+ years of experience. Analyze this OTC trading chart screenshot using EVERY possible technical analysis method available.
+            text: `STEP 1 - CHART VERIFICATION:
+First look at this image carefully. Is this a trading candlestick/price chart (forex or binary options chart with candles, price levels, time axis)?
 
-Perform ALL of the following analyses without exception:
+If this is NOT a trading chart (example: photo, chat screenshot, text image, person, animal, food, or any non-chart image):
+Reply with exactly: NOT_A_CHART
+
+If this IS a trading candlestick chart, proceed to STEP 2.
+
+STEP 2 - DEEP ANALYSIS:
+You are a world-class professional binary options and forex trader with 20+ years of experience. Analyze this OTC trading chart using EVERY possible technical analysis method.
+
+Perform ALL analyses without exception:
 
 CANDLESTICK ANALYSIS:
 - Identify all patterns in last 10 candles: Doji, Hammer, Inverted Hammer, Shooting Star, Hanging Man, Spinning Top, Marubozu, Bullish/Bearish Engulfing, Piercing Line, Dark Cloud Cover, Morning Star, Evening Star, Three White Soldiers, Three Black Crows, Harami, Harami Cross, Tweezer Top/Bottom, Belt Hold, Counterattack, Rising/Falling Three Methods
@@ -106,11 +115,11 @@ PRICE ACTION ANALYSIS:
 SUPPORT & RESISTANCE:
 - Major support levels
 - Major resistance levels
-- Dynamic support/resistance (moving averages if visible)
+- Dynamic support/resistance
 - Previous highs and lows as S/R
 - Round number levels
 - Is price at a key zone right now?
-- S/R flip (previous support become resistance or vice versa)
+- S/R flip signals
 
 MOMENTUM ANALYSIS:
 - Is momentum increasing or decreasing?
@@ -118,7 +127,6 @@ MOMENTUM ANALYSIS:
 - Price velocity (speed of movement)
 - Exhaustion candles
 - Climax buying/selling signs
-- Volume-price relationship if visible
 
 MARKET STRUCTURE:
 - Consolidation zones (ranges)
@@ -127,7 +135,6 @@ MARKET STRUCTURE:
 - Flag, Pennant, Triangle patterns if visible
 - Double Top/Bottom patterns
 - Head and Shoulders patterns
-- Cup and Handle if visible
 
 REVERSAL SIGNALS:
 - Overextension from mean
@@ -138,32 +145,29 @@ REVERSAL SIGNALS:
 - Key level rejection candles
 
 VOLUME ANALYSIS (if visible):
-- High volume on breakouts (confirms move)
-- Low volume on retracements (healthy pullback)
-- Volume climax (reversal signal)
+- High volume on breakouts
+- Low volume on retracements
+- Volume climax signals
 - Volume divergence
 
-FIBONACCI ANALYSIS (if levels visible):
-- Price at key Fibonacci retracement (0.382, 0.5, 0.618)
-- Fibonacci extension targets
+FIBONACCI ANALYSIS (if visible):
+- Price at key Fibonacci levels (0.382, 0.5, 0.618)
 
 MULTI-TIMEFRAME CONFLUENCE:
-- What does the overall chart structure suggest?
-- Are multiple factors aligning for same direction?
+- Overall chart structure
+- Multiple factors aligning for same direction
 
-After analyzing ALL factors above, determine:
-1. How many factors point UP?
-2. How many factors point DOWN?
-3. Which direction has overwhelming confluence?
-
-Give your FINAL signal based on maximum confluence.
+After analyzing ALL factors:
+1. Count factors pointing UP
+2. Count factors pointing DOWN
+3. Give signal for direction with overwhelming confluence
 
 Reply ONLY in this exact format, no asterisks, no extra text:
 DIRECTION: UP or DOWN
 WIN_RATE: 75% or 80% or 85%
 CONFIDENCE: Medium or High or Very High
 TREND: (trend description in 4 words)
-REASON: (2 sentence detailed explanation of why)`
+REASON: (2 sentence detailed explanation)`
           }
         ]
       }],
@@ -206,6 +210,11 @@ REASON: (2 sentence detailed explanation of why)`
 }
 
 function parseGeminiResponse(text) {
+  // Chart না হলে
+  if (text.trim().toUpperCase().includes('NOT_A_CHART')) {
+    return { notAChart: true };
+  }
+
   const result = {
     direction: null,
     winRate: '75%',
@@ -323,15 +332,24 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
 
       const imageBase64 = imageData.toString('base64');
 
-      // Gemini background এ চলবে
       const geminiPromise = analyzeChartWithGemini(imageBase64);
 
-      // :50 পর্যন্ত অপেক্ষা
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
       clearInterval(countdownInterval);
 
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
+
+      // Chart না হলে
+      if (signal.notAChart) {
+        try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
+        await bot.sendMessage(chatId,
+          '❌ *এটা trading chart না!*\n\n' +
+          '📸 শুধুমাত্র *Quotex chart screenshot* পাঠান।',
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
 
       incrementUserCount(userId);
       const remainingCount = userId === ADMIN_ID ? '∞' : String(DAILY_LIMIT - getUserCount(userId));
@@ -359,7 +377,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
         '💡 _' + signal.reason + '_\n' +
         '══════════════════\n' +
         '📊 Remaining analysis today: *' + remainingCount + '/' + DAILY_LIMIT + '*\n' +
-        '⚠️ _Trade at your own risk_ ⚠️',
+        '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
         { parse_mode: 'Markdown' }
       );
 
