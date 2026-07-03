@@ -1,8 +1,9 @@
-// channel.js - Auto Signal to Private Channel
+// channel.js - Auto Signal with Multi Timeframe Analysis
 const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
+const CHECK_INTERVAL = 60 * 1000; // 1 মিনিটে একবার scan
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC',
@@ -29,10 +30,10 @@ function fetchJSON(url) {
   });
 }
 
-async function getCandles(symbol) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=50&apikey=${TWELVE_DATA_KEY}`;
+async function getCandles(symbol, interval, outputsize) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize}&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
-  if (!data.values || data.values.length === 0) throw new Error('No data');
+  if (!data.values || data.values.length === 0) throw new Error('No data: ' + symbol + ' ' + interval);
   return data.values.map(v => ({
     open: parseFloat(v.open),
     high: parseFloat(v.high),
@@ -93,8 +94,7 @@ function calcBollingerBands(candles, period = 20) {
   return {
     upper: sma + 2 * stdDev,
     middle: sma,
-    lower: sma - 2 * stdDev,
-    bandwidth: (4 * stdDev) / sma * 100
+    lower: sma - 2 * stdDev
   };
 }
 
@@ -118,7 +118,7 @@ function findSupportResistance(candles) {
   const currentPrice = candles[candles.length - 1].close;
   const distToResistance = ((recentHigh - currentPrice) / currentPrice) * 100;
   const distToSupport = ((currentPrice - recentLow) / currentPrice) * 100;
-  return { recentHigh, recentLow, distToResistance, distToSupport };
+  return { distToResistance, distToSupport };
 }
 
 function analyzeCandlePattern(candles) {
@@ -147,10 +147,10 @@ function analyzeCandlePattern(candles) {
   if (p2.close > p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && isBearish && c.close < (p2.open + p2.close) / 2)
     return { pattern: 'Evening Star', direction: 'DOWN', strength: 4 };
   if (c.close > c.open && p.close > p.open && p2.close > p2.open &&
-      c.close > p.close && p.close > p2.close && body > totalRange * 0.6)
+    c.close > p.close && p.close > p2.close && body > totalRange * 0.6)
     return { pattern: 'Three White Soldiers', direction: 'UP', strength: 4 };
   if (c.close < c.open && p.close < p.open && p2.close < p2.open &&
-      c.close < p.close && p.close < p2.close && body > totalRange * 0.6)
+    c.close < p.close && p.close < p2.close && body > totalRange * 0.6)
     return { pattern: 'Three Black Crows', direction: 'DOWN', strength: 4 };
   if (body < totalRange * 0.1)
     return { pattern: 'Doji', direction: 'NEUTRAL', strength: 1 };
@@ -180,9 +180,11 @@ function analyzeTrend(candles) {
   if (lastClose > ema20) upScore += 1; else downScore += 1;
   if (ema5 > ema10 && ema10 > ema20) upScore += 2; else if (ema5 < ema10 && ema10 < ema20) downScore += 2;
 
-  const trendDir = upScore > downScore ? 'UP' : 'DOWN';
-  const trendStrength = Math.abs(upScore - downScore);
-  return { trendDir, trendStrength, ema5, ema10, ema20, ema50, upScore, downScore };
+  return {
+    trendDir: upScore > downScore ? 'UP' : 'DOWN',
+    upScore,
+    downScore
+  };
 }
 
 function analyzeVolume(candles) {
@@ -196,14 +198,11 @@ function analyzeVolume(candles) {
   const volRatio = avgRecentVol / avgOlderVol;
   if (volRatio > 1.5 && isBullishCandle) return { volumeSignal: 'UP', strength: 2 };
   if (volRatio > 1.5 && !isBullishCandle) return { volumeSignal: 'DOWN', strength: 2 };
-  if (volRatio < 0.7) return { volumeSignal: 'NEUTRAL', strength: 0 };
-  return { volumeSignal: 'NEUTRAL', strength: 1 };
+  return { volumeSignal: 'NEUTRAL', strength: 0 };
 }
 
-async function deepAnalyze(otcPair) {
-  const symbol = pairSymbolMap[otcPair];
-  const candles = await getCandles(symbol);
-
+// Single timeframe analysis
+function analyzeTimeframe(candles) {
   const rsi = calcRSI(candles);
   const rsi7 = calcRSI(candles, 7);
   const stochRSI = calcStochRSI(candles);
@@ -221,8 +220,8 @@ async function deepAnalyze(otcPair) {
 
   if (rsi < 30) { upScore += 3; signals.push('RSI Oversold'); }
   else if (rsi > 70) { downScore += 3; signals.push('RSI Overbought'); }
-  else if (rsi < 45) { upScore += 1; }
-  else if (rsi > 55) { downScore += 1; }
+  else if (rsi < 45) upScore += 1;
+  else if (rsi > 55) downScore += 1;
 
   if (rsi7 < 25) { upScore += 2; signals.push('Fast RSI Oversold'); }
   else if (rsi7 > 75) { downScore += 2; signals.push('Fast RSI Overbought'); }
@@ -238,44 +237,85 @@ async function deepAnalyze(otcPair) {
 
   upScore += trend.upScore;
   downScore += trend.downScore;
-  if (trend.trendDir === 'UP') signals.push('EMA Bullish Trend');
-  else signals.push('EMA Bearish Trend');
+  if (trend.trendDir === 'UP') signals.push('EMA Bullish');
+  else signals.push('EMA Bearish');
 
-  if (candlePattern.direction === 'UP') {
-    upScore += candlePattern.strength;
-    signals.push(candlePattern.pattern);
-  } else if (candlePattern.direction === 'DOWN') {
-    downScore += candlePattern.strength;
-    signals.push(candlePattern.pattern);
-  }
+  if (candlePattern.direction === 'UP') { upScore += candlePattern.strength; signals.push(candlePattern.pattern); }
+  else if (candlePattern.direction === 'DOWN') { downScore += candlePattern.strength; signals.push(candlePattern.pattern); }
 
-  if (sr.distToSupport < 0.1) { upScore += 3; signals.push('Price at Support'); }
-  if (sr.distToResistance < 0.1) { downScore += 3; signals.push('Price at Resistance'); }
+  if (sr.distToSupport < 0.1) { upScore += 3; signals.push('At Support'); }
+  if (sr.distToResistance < 0.1) { downScore += 3; signals.push('At Resistance'); }
 
-  if (volume.volumeSignal === 'UP') { upScore += volume.strength; signals.push('Volume Confirms UP'); }
-  else if (volume.volumeSignal === 'DOWN') { downScore += volume.strength; signals.push('Volume Confirms DOWN'); }
+  if (volume.volumeSignal === 'UP') { upScore += volume.strength; signals.push('Volume UP'); }
+  else if (volume.volumeSignal === 'DOWN') { downScore += volume.strength; signals.push('Volume DOWN'); }
 
   const volatility = (atr / lastClose) * 100;
-  if (volatility < 0.01) return null;
-
   const totalScore = upScore + downScore;
   const dominantScore = Math.max(upScore, downScore);
   const ratio = totalScore > 0 ? dominantScore / totalScore : 0;
   const direction = upScore >= downScore ? 'UP' : 'DOWN';
 
-  // ৭০% এর নিচে হলে পাঠাবে না
-  if (ratio < 0.70) return null;
+  return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
+}
 
-  let confidence, winRate;
-  if (ratio >= 0.80) {
-    confidence = 'Very High 🔥';
-    winRate = '85%';
-  } else {
-    confidence = 'High 🟢';
-    winRate = '80%';
+// Multi Timeframe Analysis — মূল function
+async function deepAnalyzeMultiTimeframe(otcPair) {
+  const symbol = pairSymbolMap[otcPair];
+
+  // তিনটা timeframe এর candle আনো
+  const [candles1m, candles5m, candles15m] = await Promise.all([
+    getCandles(symbol, '1min', 50),
+    getCandles(symbol, '5min', 50),
+    getCandles(symbol, '15min', 50)
+  ]);
+
+  // তিনটা timeframe analyze করো
+  const tf1m = analyzeTimeframe(candles1m);
+  const tf5m = analyzeTimeframe(candles5m);
+  const tf15m = analyzeTimeframe(candles15m);
+
+  console.log(`${otcPair} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%) | 15m: ${tf15m.direction}(${Math.round(tf15m.ratio*100)}%)`);
+
+  // তিনটা timeframe একই direction হতে হবে
+  if (tf1m.direction !== tf5m.direction || tf5m.direction !== tf15m.direction) {
+    console.log(`${otcPair} | Mixed timeframes — skipping`);
+    return null;
   }
 
-  const trendDesc = trend.trendDir === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
+  const direction = tf1m.direction;
+
+  // Volatility check
+  if (tf1m.volatility < 0.01) {
+    console.log(`${otcPair} | Too low volatility — skipping`);
+    return null;
+  }
+
+  // তিনটার average ratio
+  const avgRatio = (tf1m.ratio + tf5m.ratio + tf15m.ratio) / 3;
+
+  // ৭০% এর নিচে হলে skip
+  if (avgRatio < 0.70) {
+    console.log(`${otcPair} | Low confidence (${Math.round(avgRatio*100)}%) — skipping`);
+    return null;
+  }
+
+  let confidence, winRate;
+  if (avgRatio >= 0.82) {
+    confidence = 'Very High 🔥';
+    winRate = '85%';
+  } else if (avgRatio >= 0.75) {
+    confidence = 'High 🟢';
+    winRate = '80%';
+  } else {
+    confidence = 'Medium 🟡';
+    winRate = '75%';
+  }
+
+  // 15m trend description
+  const trendDesc = tf15m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
+
+  // Best signals from 1m
+  const topSignals = tf1m.signals.slice(0, 3).join(' • ');
 
   return {
     pair: otcPair,
@@ -283,11 +323,12 @@ async function deepAnalyze(otcPair) {
     confidence,
     winRate,
     trend: trendDesc,
-    signals: signals.slice(0, 3).join(' • '),
-    upScore,
-    downScore,
-    ratio: Math.round(ratio * 100),
-    totalScore
+    signals: topSignals,
+    avgRatio: Math.round(avgRatio * 100),
+    tf1m: Math.round(tf1m.ratio * 100),
+    tf5m: Math.round(tf5m.ratio * 100),
+    tf15m: Math.round(tf15m.ratio * 100),
+    totalScore: tf1m.totalScore
   };
 }
 
@@ -313,7 +354,7 @@ function getEntryExpiry() {
 }
 
 module.exports = function(bot) {
-  console.log('Channel auto signal started!');
+  console.log('Channel auto signal (Multi Timeframe) started!');
 
   let lastSentTime = 0;
   const MIN_GAP = 3 * 60 * 1000;
@@ -328,27 +369,29 @@ module.exports = function(bot) {
     const forceCheck = lastSentTime > 0 && timeSinceLast >= MAX_GAP;
 
     const { h, m } = getBDTime();
-    console.log('Scanning pairs at BD Time: ' + h + ':' + m);
+    console.log('Multi-TF Scanning at BD Time: ' + h + ':' + m);
 
     const results = [];
 
     for (const pair of pairs) {
       try {
-        const result = await deepAnalyze(pair);
+        const result = await deepAnalyzeMultiTimeframe(pair);
         if (result) results.push(result);
-        await new Promise(r => setTimeout(r, 800));
+        // প্রতি pair এর পরে delay (API rate limit)
+        await new Promise(r => setTimeout(r, 1500));
       } catch (e) {
         console.log('Error: ' + pair + ' - ' + e.message);
       }
     }
 
     if (results.length === 0) {
-      console.log('No high accuracy signal found.');
+      console.log('No confirmed multi-timeframe signal found.');
       if (forceCheck) lastSentTime = Date.now();
       return;
     }
 
-    results.sort((a, b) => b.ratio - a.ratio || b.totalScore - a.totalScore);
+    // সবচেয়ে ভালো signal পাঠাও
+    results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
 
     const { entry, expiry } = getEntryExpiry();
@@ -367,16 +410,19 @@ module.exports = function(bot) {
       '🔀 *TREND* ➜ `' + best.trend + '`\n' +
       '🔗 *SIGNALS* ➜ `' + best.signals + '`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
-      '⚠️ Trade at your own risk if loss use 1 stet MTG ⚠️',
+      '📈 *TF Analysis:*\n' +
+      '  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%` • 15min: `' + best.tf15m + '%`\n' +
+      '━━━━━━━━━━━━━━━━━━\n' +
+      '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
       { parse_mode: 'Markdown' }
     );
 
-    console.log('Best signal sent: ' + best.pair + ' | Ratio: ' + best.ratio + '% | ' + best.confidence);
+    console.log('Best MTF signal sent: ' + best.pair + ' | Avg: ' + best.avgRatio + '% | ' + best.confidence);
     lastSentTime = Date.now();
   }
 
   setTimeout(() => {
     checkAndSendBestSignal();
-    setInterval(checkAndSendBestSignal, 60 * 1000);
+    setInterval(checkAndSendBestSignal, CHECK_INTERVAL);
   }, 30000);
 };
