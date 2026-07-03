@@ -1,4 +1,4 @@
-// channel.js - Auto Signal with Multi Timeframe Analysis
+// channel.js - Auto Signal with 1min + 5min Analysis
 const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
@@ -30,7 +30,6 @@ function fetchJSON(url) {
   });
 }
 
-// শুধু 1min candle আনবো
 async function getCandles1m(symbol) {
   const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
@@ -44,7 +43,6 @@ async function getCandles1m(symbol) {
   })).reverse();
 }
 
-// 1min থেকে higher timeframe বানাও
 function buildHigherTF(candles1m, period) {
   const result = [];
   for (let i = 0; i + period <= candles1m.length; i += period) {
@@ -278,22 +276,20 @@ function analyzeTimeframe(candles) {
   return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
 }
 
-async function deepAnalyzeMultiTimeframe(otcPair) {
+async function deepAnalyze(otcPair) {
   const symbol = pairSymbolMap[otcPair];
-
-  // শুধু 1min আনবো, বাকি বানাবো
   const candles1m = await getCandles1m(symbol);
+
+  // 30 candle থেকে 5min বানাবো → 6টা candle পাবো
   const candles5m = buildHigherTF(candles1m, 5);
-  const candles15m = buildHigherTF(candles1m, 15);
 
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
-  const tf15m = analyzeTimeframe(candles15m);
 
-  console.log(`${otcPair} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%) | 15m: ${tf15m.direction}(${Math.round(tf15m.ratio*100)}%)`);
+  console.log(`${otcPair} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
 
-  // তিনটা timeframe একই direction হতে হবে
-  if (tf1m.direction !== tf5m.direction || tf5m.direction !== tf15m.direction) {
+  // দুটো timeframe একই direction হতে হবে
+  if (tf1m.direction !== tf5m.direction) {
     console.log(`${otcPair} | Mixed timeframes — skipping`);
     return null;
   }
@@ -305,7 +301,7 @@ async function deepAnalyzeMultiTimeframe(otcPair) {
     return null;
   }
 
-  const avgRatio = (tf1m.ratio + tf5m.ratio + tf15m.ratio) / 3;
+  const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
 
   if (avgRatio < 0.70) {
     console.log(`${otcPair} | Low confidence (${Math.round(avgRatio*100)}%) — skipping`);
@@ -324,7 +320,7 @@ async function deepAnalyzeMultiTimeframe(otcPair) {
     winRate = '75%';
   }
 
-  const trendDesc = tf15m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
+  const trendDesc = tf5m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
   const topSignals = tf1m.signals.slice(0, 3).join(' • ');
 
   return {
@@ -337,7 +333,6 @@ async function deepAnalyzeMultiTimeframe(otcPair) {
     avgRatio: Math.round(avgRatio * 100),
     tf1m: Math.round(tf1m.ratio * 100),
     tf5m: Math.round(tf5m.ratio * 100),
-    tf15m: Math.round(tf15m.ratio * 100),
     totalScore: tf1m.totalScore
   };
 }
@@ -364,7 +359,7 @@ function getEntryExpiry() {
 }
 
 module.exports = function(bot) {
-  console.log('Channel auto signal (Multi Timeframe) started!');
+  console.log('Channel auto signal (1min + 5min) started!');
 
   let lastSentTime = 0;
   const MIN_GAP = 3 * 60 * 1000;
@@ -379,13 +374,13 @@ module.exports = function(bot) {
     const forceCheck = lastSentTime > 0 && timeSinceLast >= MAX_GAP;
 
     const { h, m } = getBDTime();
-    console.log('Multi-TF Scanning at BD Time: ' + h + ':' + m);
+    console.log('Scanning at BD Time: ' + h + ':' + m);
 
     const results = [];
 
     for (const pair of pairs) {
       try {
-        const result = await deepAnalyzeMultiTimeframe(pair);
+        const result = await deepAnalyze(pair);
         if (result) results.push(result);
         await new Promise(r => setTimeout(r, 1500));
       } catch (e) {
@@ -394,7 +389,7 @@ module.exports = function(bot) {
     }
 
     if (results.length === 0) {
-      console.log('No confirmed multi-timeframe signal found.');
+      console.log('No confirmed signal found.');
       if (forceCheck) lastSentTime = Date.now();
       return;
     }
@@ -419,13 +414,13 @@ module.exports = function(bot) {
       '🔗 *SIGNALS* ➜ `' + best.signals + '`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
       '📈 *TF Analysis:*\n' +
-      '  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%` • 15min: `' + best.tf15m + '%`\n' +
+      '  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
-      '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
+      '⚠️ Trade at your own risk if loss use 1 stet MTG ⚠️',
       { parse_mode: 'Markdown' }
     );
 
-    console.log('Best MTF signal sent: ' + best.pair + ' | Avg: ' + best.avgRatio + '% | ' + best.confidence);
+    console.log('Signal sent: ' + best.pair + ' | Avg: ' + best.avgRatio + '% | ' + best.confidence);
     lastSentTime = Date.now();
   }
 
