@@ -358,6 +358,7 @@ function getEntryExpiry() {
   };
 }
 
+module.exports = function(bot, newsModule) {
 // News চললে signal পাঠাবে না
 if (newsModule && newsModule.isNewsActive()) {
   console.log('News active — signal skipped');
