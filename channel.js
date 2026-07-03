@@ -32,7 +32,7 @@ function fetchJSON(url) {
 
 // শুধু 1min candle আনবো
 async function getCandles1m(symbol) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=150&apikey=${TWELVE_DATA_KEY}`;
+  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
   if (!data.values || data.values.length === 0) throw new Error('No data: ' + symbol);
   return data.values.map(v => ({
