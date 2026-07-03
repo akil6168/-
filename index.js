@@ -824,7 +824,8 @@ bot.on('callback_query', async (query) => {
   );
 });
 require('./screenshot')(bot, db, approvedUsers, bannedUsers);
-require('./channel')(bot);
+const newsModule = require('./news')(bot);
+require('./channel')(bot, newsModule);
 // DB connect হলেই bot start
 connectDB().then(() => {
   console.log('Bot running v18 - Maintenance Mode Added...');
