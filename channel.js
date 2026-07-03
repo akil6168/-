@@ -3,7 +3,7 @@ const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
-const CHECK_INTERVAL = 60 * 1000; // 1 মিনিটে একবার scan
+const CHECK_INTERVAL = 60 * 1000;
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC',
@@ -30,10 +30,11 @@ function fetchJSON(url) {
   });
 }
 
-async function getCandles(symbol, interval, outputsize) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=${interval}&outputsize=${outputsize}&apikey=${TWELVE_DATA_KEY}`;
+// শুধু 1min candle আনবো
+async function getCandles1m(symbol) {
+  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=150&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
-  if (!data.values || data.values.length === 0) throw new Error('No data: ' + symbol + ' ' + interval);
+  if (!data.values || data.values.length === 0) throw new Error('No data: ' + symbol);
   return data.values.map(v => ({
     open: parseFloat(v.open),
     high: parseFloat(v.high),
@@ -41,6 +42,22 @@ async function getCandles(symbol, interval, outputsize) {
     close: parseFloat(v.close),
     volume: parseFloat(v.volume) || 0
   })).reverse();
+}
+
+// 1min থেকে higher timeframe বানাও
+function buildHigherTF(candles1m, period) {
+  const result = [];
+  for (let i = 0; i + period <= candles1m.length; i += period) {
+    const slice = candles1m.slice(i, i + period);
+    result.push({
+      open: slice[0].open,
+      high: Math.max(...slice.map(c => c.high)),
+      low: Math.min(...slice.map(c => c.low)),
+      close: slice[slice.length - 1].close,
+      volume: slice.reduce((a, b) => a + b.volume, 0)
+    });
+  }
+  return result;
 }
 
 function calcRSI(candles, period = 14) {
@@ -58,6 +75,7 @@ function calcRSI(candles, period = 14) {
 }
 
 function calcEMA(candles, period) {
+  if (candles.length < period) return candles[candles.length - 1].close;
   const k = 2 / (period + 1);
   let ema = candles[0].close;
   for (let i = 1; i < candles.length; i++) {
@@ -87,6 +105,7 @@ function calcStochRSI(candles, period = 14) {
 }
 
 function calcBollingerBands(candles, period = 20) {
+  if (candles.length < period) period = candles.length;
   const closes = candles.slice(-period).map(c => c.close);
   const sma = closes.reduce((a, b) => a + b, 0) / period;
   const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
@@ -107,7 +126,7 @@ function calcATR(candles, period = 14) {
     trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
   }
   const recent = trs.slice(-period);
-  return recent.reduce((a, b) => a + b, 0) / period;
+  return recent.reduce((a, b) => a + b, 0) / recent.length;
 }
 
 function findSupportResistance(candles) {
@@ -123,6 +142,7 @@ function findSupportResistance(candles) {
 
 function analyzeCandlePattern(candles) {
   const len = candles.length;
+  if (len < 3) return { pattern: 'No Clear Pattern', direction: 'NEUTRAL', strength: 0 };
   const c = candles[len - 1];
   const p = candles[len - 2];
   const p2 = candles[len - 3];
@@ -178,7 +198,8 @@ function analyzeTrend(candles) {
   if (ema10 > ema50) upScore += 2; else downScore += 2;
   if (lastClose > ema5) upScore += 1; else downScore += 1;
   if (lastClose > ema20) upScore += 1; else downScore += 1;
-  if (ema5 > ema10 && ema10 > ema20) upScore += 2; else if (ema5 < ema10 && ema10 < ema20) downScore += 2;
+  if (ema5 > ema10 && ema10 > ema20) upScore += 2;
+  else if (ema5 < ema10 && ema10 < ema20) downScore += 2;
 
   return {
     trendDir: upScore > downScore ? 'UP' : 'DOWN',
@@ -191,7 +212,7 @@ function analyzeVolume(candles) {
   const recent = candles.slice(-5);
   const older = candles.slice(-15, -5);
   const avgRecentVol = recent.reduce((a, b) => a + b.volume, 0) / recent.length;
-  const avgOlderVol = older.reduce((a, b) => a + b.volume, 0) / older.length;
+  const avgOlderVol = older.reduce((a, b) => a + b.volume, 0) / Math.max(older.length, 1);
   const lastCandle = candles[candles.length - 1];
   const isBullishCandle = lastCandle.close > lastCandle.open;
   if (avgOlderVol === 0) return { volumeSignal: 'NEUTRAL', strength: 0 };
@@ -201,7 +222,6 @@ function analyzeVolume(candles) {
   return { volumeSignal: 'NEUTRAL', strength: 0 };
 }
 
-// Single timeframe analysis
 function analyzeTimeframe(candles) {
   const rsi = calcRSI(candles);
   const rsi7 = calcRSI(candles, 7);
@@ -258,18 +278,14 @@ function analyzeTimeframe(candles) {
   return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
 }
 
-// Multi Timeframe Analysis — মূল function
 async function deepAnalyzeMultiTimeframe(otcPair) {
   const symbol = pairSymbolMap[otcPair];
 
-  // তিনটা timeframe এর candle আনো
-  const [candles1m, candles5m, candles15m] = await Promise.all([
-    getCandles(symbol, '1min', 50),
-    getCandles(symbol, '5min', 50),
-    getCandles(symbol, '15min', 50)
-  ]);
+  // শুধু 1min আনবো, বাকি বানাবো
+  const candles1m = await getCandles1m(symbol);
+  const candles5m = buildHigherTF(candles1m, 5);
+  const candles15m = buildHigherTF(candles1m, 15);
 
-  // তিনটা timeframe analyze করো
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
   const tf15m = analyzeTimeframe(candles15m);
@@ -284,16 +300,13 @@ async function deepAnalyzeMultiTimeframe(otcPair) {
 
   const direction = tf1m.direction;
 
-  // Volatility check
   if (tf1m.volatility < 0.01) {
     console.log(`${otcPair} | Too low volatility — skipping`);
     return null;
   }
 
-  // তিনটার average ratio
   const avgRatio = (tf1m.ratio + tf5m.ratio + tf15m.ratio) / 3;
 
-  // ৭০% এর নিচে হলে skip
   if (avgRatio < 0.70) {
     console.log(`${otcPair} | Low confidence (${Math.round(avgRatio*100)}%) — skipping`);
     return null;
@@ -311,10 +324,7 @@ async function deepAnalyzeMultiTimeframe(otcPair) {
     winRate = '75%';
   }
 
-  // 15m trend description
   const trendDesc = tf15m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
-
-  // Best signals from 1m
   const topSignals = tf1m.signals.slice(0, 3).join(' • ');
 
   return {
@@ -377,7 +387,6 @@ module.exports = function(bot) {
       try {
         const result = await deepAnalyzeMultiTimeframe(pair);
         if (result) results.push(result);
-        // প্রতি pair এর পরে delay (API rate limit)
         await new Promise(r => setTimeout(r, 1500));
       } catch (e) {
         console.log('Error: ' + pair + ' - ' + e.message);
@@ -390,7 +399,6 @@ module.exports = function(bot) {
       return;
     }
 
-    // সবচেয়ে ভালো signal পাঠাও
     results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
 
@@ -398,7 +406,7 @@ module.exports = function(bot) {
     const dirEmoji = best.direction === 'UP' ? '⏫' : '⏬';
 
     await bot.sendMessage(CHANNEL_ID,
-      '📡 *AUTO SIGNAL*\n' +
+      '📡 *𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿 𝗩𝗜𝗣 𝗯𝗼𝘁📊*\n' +
       '━━━━━━━━━━━━━━━━━━\n\n' +
       '📊 *ASSET* ➜ `' + best.pair + '`\n' +
       '🚀 *DIRECTION* ➜ ' + best.direction + ' ' + dirEmoji + '\n' +
