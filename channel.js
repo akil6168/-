@@ -436,7 +436,7 @@ module.exports = function(bot) {
       '📈 *TF Analysis:*\n' +
       '  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
-      '⚠️ _Trade at your own risk if loss use 1 step MTG_ ⚠️',
+      '⚠️ Trade at your own risk if loss use 1 step MTG ⚠️',
       { parse_mode: 'Markdown' }
     );
 
