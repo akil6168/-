@@ -358,7 +358,11 @@ function getEntryExpiry() {
   };
 }
 
-module.exports = function(bot) {
+// News চললে signal পাঠাবে না
+if (newsModule && newsModule.isNewsActive()) {
+  console.log('News active — signal skipped');
+  return;
+}
   console.log('Channel auto signal (1min + 5min) started!');
 
   let lastSentTime = 0;
