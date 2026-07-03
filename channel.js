@@ -2,10 +2,8 @@
 const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
-const ALERT_CHANNEL_ID = '-1002268650240'; // Qx alert channel
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
 const CHECK_INTERVAL = 60 * 1000;
-const ALERT_GAP = 20 * 60 * 1000; // 20 minutes
 
 const pairs = [
   'EUR/USD OTC', 'GBP/USD OTC',
@@ -367,29 +365,6 @@ module.exports = function(bot) {
   const MIN_GAP = 3 * 60 * 1000;
   const MAX_GAP = 8 * 60 * 1000;
 
-  // ---- Qx alert (no-signal watchdog) state ----
-  let lastSignalTime = Date.now(); // শেষ কবে সিগন্যাল পাঠানো হয়েছে (বট স্টার্ট হলে টাইমার শুরু হয়)
-
-  async function sendNoSignalAlert() {
-    try {
-      const { h, m } = getBDTime();
-      await bot.sendMessage(ALERT_CHANNEL_ID,
-        '⚠️ *𝗤𝘅 𝗔𝗹𝗲𝗿𝘁* ⚠️\n' +
-        '━━━━━━━━━━━━━━━━━━\n' +
-        'গত ২০ মিনিটে কোনো কনফার্ম সিগন্যাল পাওয়া যায়নি।\n' +
-        '🕒 *সময়* ➜ `' + h + ':' + m + '` (BD Time)\n' +
-        '━━━━━━━━━━━━━━━━━━\n' +
-        '_মার্কেট কন্ডিশন অনুযায়ী স্ক্যান চলছে।_',
-        { parse_mode: 'Markdown' }
-      );
-      console.log('No-signal alert sent to Qx alert channel.');
-    } catch (e) {
-      console.log('Alert send error: ' + e.message);
-    }
-    // পাঠানোর সাথে সাথে টাইমার রিফ্রেশ, যাতে পরবর্তী ২০ মিনিট পর আবার alert যায়
-    lastSignalTime = Date.now();
-  }
-
   async function checkAndSendBestSignal() {
     const now = Date.now();
     const timeSinceLast = now - lastSentTime;
@@ -416,11 +391,6 @@ module.exports = function(bot) {
     if (results.length === 0) {
       console.log('No confirmed signal found.');
       if (forceCheck) lastSentTime = Date.now();
-
-      // ২০ মিনিট ধরে কোনো সিগন্যাল না পাঠানো হলে Qx alert চ্যানেলে জানাবে
-      if (Date.now() - lastSignalTime >= ALERT_GAP) {
-        await sendNoSignalAlert();
-      }
       return;
     }
 
@@ -452,7 +422,6 @@ module.exports = function(bot) {
 
     console.log('Signal sent: ' + best.pair + ' | Avg: ' + best.avgRatio + '% | ' + best.confidence);
     lastSentTime = Date.now();
-    lastSignalTime = Date.now(); // সিগন্যাল পাঠানোর সাথে সাথে alert টাইমার রিফ্রেশ
   }
 
   setTimeout(() => {
