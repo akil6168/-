@@ -244,42 +244,19 @@ function sendPairMenu(chatId) {
 bot.onText(/\/maintenance (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const action = match[1].trim().toLowerCase();
-
   if (action === 'on') {
     maintenanceMode = true;
-    await bot.sendMessage(ADMIN_ID,
-      '🔧 *Maintenance Mode চালু হয়েছে!*\n\n' +
-      '⛔ সব user এর access বন্ধ।',
-      { parse_mode: 'Markdown' }
-    );
-    // সব user কে notify করো
+    await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode চালু হয়েছে!*\n\n⛔ সব user এর access বন্ধ।', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try {
-        await bot.sendMessage(uid,
-          '🔧 *Bot Maintenance চলছে...*\n\n' +
-          '⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
-          { parse_mode: 'Markdown' }
-        );
-      } catch (e) {}
+      try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
     }
   } else if (action === 'off') {
     maintenanceMode = false;
-    await bot.sendMessage(ADMIN_ID,
-      '✅ *Maintenance Mode বন্ধ হয়েছে!*\n\n' +
-      '🚀 Bot আবার চালু আছে।',
-      { parse_mode: 'Markdown' }
-    );
-    // সব user কে notify করো
+    await bot.sendMessage(ADMIN_ID, '✅ *Maintenance Mode বন্ধ হয়েছে!*\n\n🚀 Bot আবার চালু আছে।', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try {
-        await bot.sendMessage(uid,
-          '✅ *Bot আবার চালু হয়েছে!*\n\n' +
-          '📊 Signal নিতে নিচের বাটনে ক্লিক করুন।',
-          { parse_mode: 'Markdown' }
-        );
-      } catch (e) {}
+      try { await bot.sendMessage(uid, '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
     }
   } else {
     await bot.sendMessage(ADMIN_ID, '❌ Format: /maintenance on অথবা /maintenance off');
@@ -293,47 +270,26 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId,
-      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' });
     return;
   }
-
   if (bannedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে। Bot use করতে পারবেন না।');
     return;
   }
-
   if (!startedUsers.has(userId)) {
     await addStartedUser(userId);
-    await bot.sendMessage(ADMIN_ID,
-      '♻️ *NEW USER STARTED BOT* ➕\n\n' +
-      '👤 Name: ' + firstName + '\n' +
-      '🆔 ID: `' + userId + '`',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(ADMIN_ID, '♻️ *NEW USER STARTED BOT* ➕\n\n👤 Name: ' + firstName + '\n🆔 ID: `' + userId + '`', { parse_mode: 'Markdown' });
   }
-
   if (userId === ADMIN_ID || approvedUsers.has(userId)) {
     await bot.sendMessage(chatId,
-      '⚡ *AI Signal System*\n' +
-      '📊 *নির্ভুল Trade Analysis*\n' +
-      '📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n' +
-      '👑 *Premium VIP সুবিধা*\n\n' +
-      '📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
+      '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
     return;
   }
-
   await bot.sendMessage(chatId,
-    '⚡ *AI Signal System*\n' +
-    '📊 *নির্ভুল Trade Analysis*\n' +
-    '📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n' +
-    '👑 *Premium VIP সুবিধা*\n\n' +
-    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n' +
-    '✅ Verify করলেই সব feature unlock হবে।',
+    '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n✅ Verify করলেই সব feature unlock হবে।',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -350,15 +306,9 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ অপেক্ষা করুন।', { parse_mode: 'Markdown' });
-    return;
-  }
+  if (userId !== ADMIN_ID && maintenanceMode) { await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ অপেক্ষা করুন।', { parse_mode: 'Markdown' }); return; }
   if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।'); return; }
-  if (!approvedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
-    return;
-  }
+  if (!approvedUsers.has(userId)) { await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start'); return; }
   sendPairMenu(chatId);
 });
 
@@ -367,9 +317,7 @@ bot.onText(/\/admin/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
   const status = maintenanceMode ? '🔧 ON' : '✅ OFF';
   await bot.sendMessage(ADMIN_ID,
-    '👑 *ADMIN PANEL*\n' +
-    '══════════════════\n' +
-    '🔧 Maintenance: ' + status,
+    '👑 *ADMIN PANEL*\n══════════════════\n🔧 Maintenance: ' + status,
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -393,22 +341,11 @@ bot.onText(/\/admin/, async (msg) => {
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
-  if (isNaN(targetId)) {
-    await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id]');
-    return;
-  }
+  if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id]'); return; }
   const apiKey = generateApiKey();
   passwordMode.set(targetId, apiKey);
-  await bot.sendMessage(targetId,
-    '✅ *আপনার Trader ID verify হয়েছে!*\n\n' +
-    '🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`',
-    { parse_mode: 'Markdown' }
-  );
-  await bot.sendMessage(ADMIN_ID,
-    '✅ *User `' + targetId + '` কে approve করা হয়েছে।*\n' +
-    '🔑 API KEY: `' + apiKey + '`',
-    { parse_mode: 'Markdown' }
-  );
+  await bot.sendMessage(targetId, '✅ *আপনার Trader ID verify হয়েছে!*\n\n🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`', { parse_mode: 'Markdown' });
+  await bot.sendMessage(ADMIN_ID, '✅ *User `' + targetId + '` কে approve করা হয়েছে।*\n🔑 API KEY: `' + apiKey + '`', { parse_mode: 'Markdown' });
 });
 
 // /unapprove
@@ -441,10 +378,7 @@ bot.onText(/\/unban (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
   if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /unban [user_id]'); return; }
-  if (!bannedUsers.has(targetId)) {
-    await bot.sendMessage(ADMIN_ID, '⚠️ User `' + targetId + '` ban list এ নেই।', { parse_mode: 'Markdown' });
-    return;
-  }
+  if (!bannedUsers.has(targetId)) { await bot.sendMessage(ADMIN_ID, '⚠️ User `' + targetId + '` ban list এ নেই।', { parse_mode: 'Markdown' }); return; }
   await removeBannedUser(targetId);
   await bot.sendMessage(ADMIN_ID, '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
   try { await bot.sendMessage(targetId, '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'); } catch (e) {}
@@ -456,30 +390,21 @@ bot.on('message', async (msg) => {
   const text = msg.text;
   const userId = msg.from.id;
   const firstName = msg.from.first_name || 'User';
-  const username = msg.from.username
-    ? '@' + msg.from.username
-    : '[' + firstName + '](tg://user?id=' + userId + ')';
+  const username = msg.from.username ? '@' + msg.from.username : '[' + firstName + '](tg://user?id=' + userId + ')';
 
   if (!text || text.startsWith('/')) return;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId,
-      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' });
     return;
   }
-
   if (userId !== ADMIN_ID && bannedUsers.has(userId)) {
     await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।');
     return;
   }
 
   if (text === '➕ Generate New Signal 📊') {
-    if (!approvedUsers.has(userId)) {
-      await bot.sendMessage(chatId, '🔒 আপনার account verified না।');
-      return;
-    }
+    if (!approvedUsers.has(userId)) { await bot.sendMessage(chatId, '🔒 আপনার account verified না।'); return; }
     sendPairMenu(chatId);
     return;
   }
@@ -488,10 +413,7 @@ bot.on('message', async (msg) => {
     broadcastMode.delete(userId);
     let successCount = 0;
     for (const uid of startedUsers) {
-      try {
-        await bot.sendMessage(uid, '📢 *Admin Message:*\n\n' + text, { parse_mode: 'Markdown' });
-        successCount++;
-      } catch (e) {}
+      try { await bot.sendMessage(uid, '📢 *Admin Message:*\n\n' + text, { parse_mode: 'Markdown' }); successCount++; } catch (e) {}
     }
     await bot.sendMessage(ADMIN_ID, '✅ Broadcast sent to ' + successCount + ' users!');
     return;
@@ -526,10 +448,7 @@ bot.on('message', async (msg) => {
     unbanMode.delete(userId);
     const targetId = parseInt(text.trim());
     if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
-    if (!bannedUsers.has(targetId)) {
-      await bot.sendMessage(ADMIN_ID, '⚠️ User ban list এ নেই।');
-      return;
-    }
+    if (!bannedUsers.has(targetId)) { await bot.sendMessage(ADMIN_ID, '⚠️ User ban list এ নেই।'); return; }
     await removeBannedUser(targetId);
     await bot.sendMessage(ADMIN_ID, '✅ *User Unbanned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
     try { await bot.sendMessage(targetId, '✅ আপনার ban তুলে নেওয়া হয়েছে!\n\n📌 পুনরায় access পেতে /start দিন।'); } catch (e) {}
@@ -541,10 +460,7 @@ bot.on('message', async (msg) => {
     if (text === correctPass) {
       passwordMode.delete(userId);
       await addApprovedUser(userId);
-      await bot.sendMessage(chatId,
-        '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
-        { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
-      );
+      await bot.sendMessage(chatId, '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।', { parse_mode: 'Markdown', reply_markup: approvedKeyboard });
     } else {
       await bot.sendMessage(chatId, '❌ ভুল API KEY! আবার চেষ্টা করুন।');
     }
@@ -559,27 +475,13 @@ bot.on('message', async (msg) => {
   }
 
   verifyMode.delete(userId);
-  await addSubmission({
-    userId, name: firstName,
-    username: msg.from.username || null,
-    traderId: text,
-    time: new Date().toISOString()
-  });
+  await addSubmission({ userId, name: firstName, username: msg.from.username || null, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(ADMIN_ID,
-    '🔔 *NEW TRADER ID SUBMISSION*\n\n' +
-    '👤 Name: ' + username + '\n' +
-    '🆔 User ID: `' + userId + '`\n' +
-    '📌 Trader ID: `' + text + '`\n\n' +
-    '✅ Approve: `/approve ' + userId + '`',
+    '🔔 *NEW TRADER ID SUBMISSION*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n\n✅ Approve: `/approve ' + userId + '`',
     { parse_mode: 'Markdown' }
   );
-
-  await bot.sendMessage(chatId,
-    '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n' +
-    '⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔',
-    { parse_mode: 'Markdown' }
-  );
+  await bot.sendMessage(chatId, '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔', { parse_mode: 'Markdown' });
 });
 
 // Callback handler
@@ -590,54 +492,30 @@ bot.on('callback_query', async (query) => {
   bot.answerCallbackQuery(query.id);
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId,
-      '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
   }
 
-  // Maintenance toggle from admin panel
   if (pair === 'admin_maintenance' && userId === ADMIN_ID) {
     maintenanceMode = !maintenanceMode;
     const status = maintenanceMode ? 'চালু 🔧' : 'বন্ধ ✅';
-    await bot.sendMessage(ADMIN_ID,
-      '🔧 *Maintenance Mode ' + status + ' হয়েছে!*',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode ' + status + ' হয়েছে!*', { parse_mode: 'Markdown' });
     if (maintenanceMode) {
       for (const uid of startedUsers) {
         if (uid === ADMIN_ID) continue;
-        try {
-          await bot.sendMessage(uid,
-            '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।',
-            { parse_mode: 'Markdown' }
-          );
-        } catch (e) {}
+        try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
       }
     } else {
       for (const uid of startedUsers) {
         if (uid === ADMIN_ID) continue;
-        try {
-          await bot.sendMessage(uid,
-            '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।',
-            { parse_mode: 'Markdown' }
-          );
-        } catch (e) {}
+        try { await bot.sendMessage(uid, '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
       }
     }
     return;
   }
 
   if (pair === 'admin_total' && userId === ADMIN_ID) {
-    await bot.sendMessage(ADMIN_ID,
-      '👥 *TOTAL USERS*\n\n' +
-      '📊 Total Started: `' + startedUsers.size + '`\n' +
-      '✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n' +
-      '🚫 Total Banned: `' + bannedUsers.size + '`\n' +
-      '📋 Total Submissions: `' + submissions.length + '`',
-      { parse_mode: 'Markdown' }
-    );
+    await bot.sendMessage(ADMIN_ID, '👥 *TOTAL USERS*\n\n📊 Total Started: `' + startedUsers.size + '`\n✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n🚫 Total Banned: `' + bannedUsers.size + '`\n📋 Total Submissions: `' + submissions.length + '`', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -688,10 +566,8 @@ bot.on('callback_query', async (query) => {
     unapproveMode.add(ADMIN_ID);
     const list = [...approvedUsers].filter(u => u !== ADMIN_ID);
     let text = '❌ *UNAPPROVE USER*\n\n';
-    if (list.length === 0) {
-      text += 'কোনো approved user নেই।';
-      unapproveMode.delete(ADMIN_ID);
-    } else {
+    if (list.length === 0) { text += 'কোনো approved user নেই।'; unapproveMode.delete(ADMIN_ID); }
+    else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
         const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
@@ -707,10 +583,8 @@ bot.on('callback_query', async (query) => {
     banMode.add(ADMIN_ID);
     const list = [...startedUsers].filter(u => u !== ADMIN_ID && !bannedUsers.has(u));
     let text = '🚫 *BAN USER*\n\n';
-    if (list.length === 0) {
-      text += 'ban করার মতো কোনো user নেই।';
-      banMode.delete(ADMIN_ID);
-    } else {
+    if (list.length === 0) { text += 'ban করার মতো কোনো user নেই।'; banMode.delete(ADMIN_ID); }
+    else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
         const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
@@ -726,10 +600,8 @@ bot.on('callback_query', async (query) => {
     unbanMode.add(ADMIN_ID);
     const list = [...bannedUsers];
     let text = '✅ *UNBAN USER*\n\n';
-    if (list.length === 0) {
-      text += 'ban list এ কোনো user নেই।';
-      unbanMode.delete(ADMIN_ID);
-    } else {
+    if (list.length === 0) { text += 'ban list এ কোনো user নেই।'; unbanMode.delete(ADMIN_ID); }
+    else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
         const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
@@ -760,10 +632,7 @@ bot.on('callback_query', async (query) => {
   await new Promise((resolve) => {
     const loadInterval = setInterval(async () => {
       count++;
-      try {
-        await bot.editMessageText('⏳ Loading signal generation....\n\n' + count + ' / 100',
-          { chat_id: chatId, message_id: loadId });
-      } catch (e) {}
+      try { await bot.editMessageText('⏳ Loading signal generation....\n\n' + count + ' / 100', { chat_id: chatId, message_id: loadId }); } catch (e) {}
       if (count >= 100) { clearInterval(loadInterval); resolve(); }
     }, 30);
   });
@@ -777,10 +646,7 @@ bot.on('callback_query', async (query) => {
       const h = String(bd.getUTCHours()).padStart(2, '0');
       const m = String(bd.getUTCMinutes()).padStart(2, '0');
       const s = String(bd.getUTCSeconds()).padStart(2, '0');
-      try {
-        await bot.editMessageText('🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
-          { chat_id: chatId, message_id: clockId });
-      } catch (e) {}
+      try { await bot.editMessageText('🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s, { chat_id: chatId, message_id: clockId }); } catch (e) {}
       if (bd.getUTCSeconds() === 58) { clearInterval(clockInterval); resolve(); }
     }, 1000);
   });
@@ -793,11 +659,7 @@ bot.on('callback_query', async (query) => {
     signal = await analyzeSignal(pair);
   } catch (e) {
     const directions = ['UP⏫', 'DOWN⏬'];
-    signal = {
-      direction: directions[Math.floor(Math.random() * 2)],
-      confidence: 'Medium 🟡', winRate: '75%',
-      trend: 'N/A', rsi: 'N/A', pattern: 'N/A'
-    };
+    signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%', trend: 'N/A', rsi: 'N/A', pattern: 'N/A' };
   }
 
   const now2 = new Date();
@@ -807,28 +669,20 @@ bot.on('callback_query', async (query) => {
   const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
 
   await bot.sendMessage(chatId,
-    '╭──────────────────╮\n' +
-    '│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n' +
-    '╰──────────────────╯\n\n' +
-    '📊 *ASSET*  ➜ `' + pair + '`\n' +
-    '🔹 *TIME*     ➜ `1 MIN`\n' +
-    '🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n' +
-    '══════════════════\n' +
-    '🚀 *DIRECTION* ➜ ' + signal.direction + '\n' +
-    '♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n' +
-    '✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n' +
-    '══════════════════\n' +
-    '⏹️ *Take the trade now!*\n' +
-    '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
+    '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
+    '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n══════════════════\n' +
+    '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
+    '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
     { parse_mode: 'Markdown' }
   );
 });
-require('./screenshot')(bot, db, approvedUsers, bannedUsers);
-const newsModule = require('./news')(bot);
-require('./channel')(bot, newsModule);
-// DB connect হলেই bot start
+
+// ✅ DB connect হলেই সব module load হবে
 connectDB().then(() => {
   console.log('Bot running v18 - Maintenance Mode Added...');
+  require('./screenshot')(bot, db, approvedUsers, bannedUsers);
+  const newsModule = require('./news')(bot);
+  require('./channel')(bot, newsModule);
   bot.startPolling();
 }).catch(err => {
   console.error('MongoDB connection failed:', err);
