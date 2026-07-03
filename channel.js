@@ -108,11 +108,7 @@ function calcBollingerBands(candles, period = 20) {
   const sma = closes.reduce((a, b) => a + b, 0) / period;
   const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
   const stdDev = Math.sqrt(variance);
-  return {
-    upper: sma + 2 * stdDev,
-    middle: sma,
-    lower: sma - 2 * stdDev
-  };
+  return { upper: sma + 2 * stdDev, middle: sma, lower: sma - 2 * stdDev };
 }
 
 function calcATR(candles, period = 14) {
@@ -133,9 +129,10 @@ function findSupportResistance(candles) {
   const recentHigh = Math.max(...highs.slice(-20));
   const recentLow = Math.min(...lows.slice(-20));
   const currentPrice = candles[candles.length - 1].close;
-  const distToResistance = ((recentHigh - currentPrice) / currentPrice) * 100;
-  const distToSupport = ((currentPrice - recentLow) / currentPrice) * 100;
-  return { distToResistance, distToSupport };
+  return {
+    distToResistance: ((recentHigh - currentPrice) / currentPrice) * 100,
+    distToSupport: ((currentPrice - recentLow) / currentPrice) * 100
+  };
 }
 
 function analyzeCandlePattern(candles) {
@@ -144,7 +141,6 @@ function analyzeCandlePattern(candles) {
   const c = candles[len - 1];
   const p = candles[len - 2];
   const p2 = candles[len - 3];
-
   const body = Math.abs(c.close - c.open);
   const upperWick = c.high - Math.max(c.close, c.open);
   const lowerWick = Math.min(c.close, c.open) - c.low;
@@ -164,11 +160,9 @@ function analyzeCandlePattern(candles) {
     return { pattern: 'Morning Star', direction: 'UP', strength: 4 };
   if (p2.close > p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && isBearish && c.close < (p2.open + p2.close) / 2)
     return { pattern: 'Evening Star', direction: 'DOWN', strength: 4 };
-  if (c.close > c.open && p.close > p.open && p2.close > p2.open &&
-    c.close > p.close && p.close > p2.close && body > totalRange * 0.6)
+  if (c.close > c.open && p.close > p.open && p2.close > p2.open && c.close > p.close && p.close > p2.close && body > totalRange * 0.6)
     return { pattern: 'Three White Soldiers', direction: 'UP', strength: 4 };
-  if (c.close < c.open && p.close < p.open && p2.close < p2.open &&
-    c.close < p.close && p.close < p2.close && body > totalRange * 0.6)
+  if (c.close < c.open && p.close < p.open && p2.close < p2.open && c.close < p.close && p.close < p2.close && body > totalRange * 0.6)
     return { pattern: 'Three Black Crows', direction: 'DOWN', strength: 4 };
   if (body < totalRange * 0.1)
     return { pattern: 'Doji', direction: 'NEUTRAL', strength: 1 };
@@ -180,7 +174,6 @@ function analyzeCandlePattern(candles) {
     return { pattern: 'Higher High (Uptrend)', direction: 'UP', strength: 2 };
   if (c.high < p.high && c.low < p.low && p.high < p2.high && p.low < p2.low)
     return { pattern: 'Lower Low (Downtrend)', direction: 'DOWN', strength: 2 };
-
   return { pattern: 'No Clear Pattern', direction: 'NEUTRAL', strength: 0 };
 }
 
@@ -190,7 +183,6 @@ function analyzeTrend(candles) {
   const ema20 = calcEMA(candles, 20);
   const ema50 = calcEMA(candles, 50);
   const lastClose = candles[candles.length - 1].close;
-
   let upScore = 0, downScore = 0;
   if (ema5 > ema20) upScore += 2; else downScore += 2;
   if (ema10 > ema50) upScore += 2; else downScore += 2;
@@ -198,12 +190,7 @@ function analyzeTrend(candles) {
   if (lastClose > ema20) upScore += 1; else downScore += 1;
   if (ema5 > ema10 && ema10 > ema20) upScore += 2;
   else if (ema5 < ema10 && ema10 < ema20) downScore += 2;
-
-  return {
-    trendDir: upScore > downScore ? 'UP' : 'DOWN',
-    upScore,
-    downScore
-  };
+  return { trendDir: upScore > downScore ? 'UP' : 'DOWN', upScore, downScore };
 }
 
 function analyzeVolume(candles) {
@@ -279,8 +266,6 @@ function analyzeTimeframe(candles) {
 async function deepAnalyze(otcPair) {
   const symbol = pairSymbolMap[otcPair];
   const candles1m = await getCandles1m(symbol);
-
-  // 30 candle থেকে 5min বানাবো → 6টা candle পাবো
   const candles5m = buildHigherTF(candles1m, 5);
 
   const tf1m = analyzeTimeframe(candles1m);
@@ -288,13 +273,10 @@ async function deepAnalyze(otcPair) {
 
   console.log(`${otcPair} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
 
-  // দুটো timeframe একই direction হতে হবে
   if (tf1m.direction !== tf5m.direction) {
     console.log(`${otcPair} | Mixed timeframes — skipping`);
     return null;
   }
-
-  const direction = tf1m.direction;
 
   if (tf1m.volatility < 0.01) {
     console.log(`${otcPair} | Too low volatility — skipping`);
@@ -309,23 +291,16 @@ async function deepAnalyze(otcPair) {
   }
 
   let confidence, winRate;
-  if (avgRatio >= 0.82) {
-    confidence = 'Very High 🔥';
-    winRate = '85%';
-  } else if (avgRatio >= 0.75) {
-    confidence = 'High 🟢';
-    winRate = '80%';
-  } else {
-    confidence = 'Medium 🟡';
-    winRate = '75%';
-  }
+  if (avgRatio >= 0.82) { confidence = 'Very High 🔥'; winRate = '85%'; }
+  else if (avgRatio >= 0.75) { confidence = 'High 🟢'; winRate = '80%'; }
+  else { confidence = 'Medium 🟡'; winRate = '75%'; }
 
   const trendDesc = tf5m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
   const topSignals = tf1m.signals.slice(0, 3).join(' • ');
 
   return {
     pair: otcPair,
-    direction,
+    direction: tf1m.direction,
     confidence,
     winRate,
     trend: trendDesc,
@@ -359,11 +334,6 @@ function getEntryExpiry() {
 }
 
 module.exports = function(bot, newsModule) {
-// News চললে signal পাঠাবে না
-if (newsModule && newsModule.isNewsActive()) {
-  console.log('News active — signal skipped');
-  return;
-}
   console.log('Channel auto signal (1min + 5min) started!');
 
   let lastSentTime = 0;
@@ -371,18 +341,21 @@ if (newsModule && newsModule.isNewsActive()) {
   const MAX_GAP = 8 * 60 * 1000;
 
   async function checkAndSendBestSignal() {
+    // News active হলে skip করো
+    if (newsModule && newsModule.isNewsActive()) {
+      console.log('News active — signal skipped');
+      return;
+    }
+
     const now = Date.now();
     const timeSinceLast = now - lastSentTime;
-
     if (lastSentTime > 0 && timeSinceLast < MIN_GAP) return;
-
     const forceCheck = lastSentTime > 0 && timeSinceLast >= MAX_GAP;
 
     const { h, m } = getBDTime();
     console.log('Scanning at BD Time: ' + h + ':' + m);
 
     const results = [];
-
     for (const pair of pairs) {
       try {
         const result = await deepAnalyze(pair);
@@ -401,7 +374,6 @@ if (newsModule && newsModule.isNewsActive()) {
 
     results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
-
     const { entry, expiry } = getEntryExpiry();
     const dirEmoji = best.direction === 'UP' ? '⏫' : '⏬';
 
