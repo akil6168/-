@@ -6,17 +6,17 @@ const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
 const CHECK_INTERVAL = 60 * 1000;
 
-const pairs = [
-  'EUR/USD OTC', 'GBP/USD OTC',
-  'USD/JPY OTC', 'AUD/USD OTC'
+// Live market pairs
+const livePairs = [
+  'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD',
+  'USD/CAD', 'USD/CHF', 'EUR/JPY', 'GBP/JPY'
 ];
 
-const pairSymbolMap = {
-  'EUR/USD OTC': 'EUR/USD',
-  'GBP/USD OTC': 'GBP/USD',
-  'USD/JPY OTC': 'USD/JPY',
-  'AUD/USD OTC': 'AUD/USD'
-};
+// OTC pairs
+const otcPairs = [
+  'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC', 'AUD/USD OTC',
+  'EUR/GBP OTC', 'USD/CAD OTC', 'EUR/JPY OTC', 'GBP/JPY OTC'
+];
 
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
@@ -31,14 +31,13 @@ function fetchJSON(url) {
   });
 }
 
-// Market open/closed check
 function isForexMarketOpen() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
   const day = bd.getUTCDay();
   const hour = bd.getUTCHours();
-  if (day === 0) return false; // Sunday বন্ধ
-  if (day === 6 && hour >= 5) return false; // Saturday ৫টার পরে বন্ধ
+  if (day === 0) return false;
+  if (day === 6 && hour >= 5) return false;
   return true;
 }
 
@@ -278,22 +277,21 @@ function analyzeTimeframe(candles) {
   return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
 }
 
-// Market open: Deep analysis
-async function deepAnalyze(otcPair) {
-  const symbol = pairSymbolMap[otcPair];
+// Live market analysis
+async function analyzeLivePair(symbol) {
   const candles1m = await getCandles1m(symbol);
   const candles5m = buildHigherTF(candles1m, 5);
 
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
 
-  console.log(`${otcPair} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
+  console.log(`${symbol} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
 
-  if (tf1m.direction !== tf5m.direction) { console.log(`${otcPair} | Mixed — skipping`); return null; }
-  if (tf1m.volatility < 0.01) { console.log(`${otcPair} | Low volatility — skipping`); return null; }
+  if (tf1m.direction !== tf5m.direction) { console.log(`${symbol} | Mixed — skipping`); return null; }
+  if (tf1m.volatility < 0.01) { console.log(`${symbol} | Low volatility — skipping`); return null; }
 
   const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
-  if (avgRatio < 0.70) { console.log(`${otcPair} | Low confidence — skipping`); return null; }
+  if (avgRatio < 0.70) { console.log(`${symbol} | Low confidence — skipping`); return null; }
 
   let confidence, winRate;
   if (avgRatio >= 0.82) { confidence = 'Very High 🔥'; winRate = '85%'; }
@@ -301,7 +299,7 @@ async function deepAnalyze(otcPair) {
   else { confidence = 'Medium 🟡'; winRate = '75%'; }
 
   return {
-    pair: otcPair,
+    pair: symbol,
     direction: tf1m.direction,
     confidence,
     winRate,
@@ -315,14 +313,13 @@ async function deepAnalyze(otcPair) {
   };
 }
 
-// Market closed: Fallback signal
-function fallbackSignal(otcPair) {
+// OTC fallback signal
+function otcFallbackSignal(otcPair) {
   const directions = ['UP', 'DOWN'];
   const direction = directions[Math.floor(Math.random() * 2)];
   const confidenceList = ['High 🟢', 'Medium 🟡'];
   const confidence = confidenceList[Math.floor(Math.random() * 2)];
   const winRate = confidence.includes('High') ? '80%' : '75%';
-
   return {
     pair: otcPair,
     direction,
@@ -355,12 +352,11 @@ module.exports = function(bot, newsModule) {
   console.log('Channel auto signal started!');
 
   let lastSentTime = 0;
-  let lastMarketStatus = null; // null = unknown, true = open, false = closed
+  let lastMarketStatus = null;
   const MIN_GAP = 3 * 60 * 1000;
   const MAX_GAP = 8 * 60 * 1000;
 
   async function checkAndSendBestSignal() {
-    // News active হলে skip
     if (newsModule && newsModule.isNewsActive()) {
       console.log('News active — signal skipped');
       return;
@@ -369,7 +365,7 @@ module.exports = function(bot, newsModule) {
     const marketOpen = isForexMarketOpen();
     const { h, m } = getBDTime();
 
-    // Market status change হলে admin কে notify করো
+    // Market status change হলে admin কে notify
     if (lastMarketStatus !== marketOpen) {
       lastMarketStatus = marketOpen;
       if (marketOpen) {
@@ -405,24 +401,27 @@ module.exports = function(bot, newsModule) {
     let results = [];
 
     if (marketOpen) {
-      // Live analysis
-      for (const pair of pairs) {
+      // Live market analysis
+      for (const symbol of livePairs) {
         try {
-          const result = await deepAnalyze(pair);
+          const result = await analyzeLivePair(symbol);
           if (result) results.push(result);
           await new Promise(r => setTimeout(r, 1500));
         } catch (e) {
-          console.log('Error: ' + pair + ' - ' + e.message);
-          // API error হলে fallback
-          const fb = fallbackSignal(pair);
-          results.push(fb);
+          console.log('Live Error: ' + symbol + ' - ' + e.message);
         }
       }
-    } else {
-      // Market closed — fallback signal সব pair এর জন্য
-      for (const pair of pairs) {
-        results.push(fallbackSignal(pair));
+
+      // Live signal না পেলে OTC fallback
+      if (results.length === 0) {
+        console.log('No live signal — using OTC fallback');
+        const randomOTC = otcPairs[Math.floor(Math.random() * otcPairs.length)];
+        results.push(otcFallbackSignal(randomOTC));
       }
+    } else {
+      // Market closed — random OTC signal
+      const randomOTC = otcPairs[Math.floor(Math.random() * otcPairs.length)];
+      results.push(otcFallbackSignal(randomOTC));
     }
 
     if (results.length === 0) {
@@ -431,7 +430,7 @@ module.exports = function(bot, newsModule) {
       return;
     }
 
-    // সবচেয়ে ভালো signal বেছে নাও
+    // Best signal বেছে নাও
     results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
     const { entry, expiry } = getEntryExpiry();
@@ -451,8 +450,11 @@ module.exports = function(bot, newsModule) {
       '🔗 *SIGNALS* ➜ `' + best.signals + '`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
       (best.isLive ?
-        '📈 *TF Analysis:*\n  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n━━━━━━━━━━━━━━━━━━\n'
-        : '📊 *Mode:* OTC Signal\n━━━━━━━━━━━━━━━━━━\n') +
+        '📊 *Mode:* Live market Signal\n' +
+        '📈 *TF Analysis:*\n  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n'
+        :
+        '📊 *Mode:* OTC Market Signal\n') +
+      '━━━━━━━━━━━━━━━━━━\n' +
       '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
       { parse_mode: 'Markdown' }
     );
