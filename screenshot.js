@@ -2,7 +2,6 @@
 const https = require('https');
 
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
-const DAILY_LIMIT = 5;
 const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
@@ -100,36 +99,36 @@ TREND ANALYSIS:
 - EMA crossover analysis (EMA 5, 10, 20, 50, 200)
 - SMA crossover analysis
 - Hull Moving Average (HMA) trend
-- ADX (Average Directional Index) — trend strength measurement
+- ADX (Average Directional Index) trend strength measurement
 - Supertrend indicator signal (UP/DOWN)
 - Parabolic SAR position (above/below price)
 - Ichimoku Cloud analysis (Tenkan, Kijun, Senkou Span A/B, Chikou)
 
 MOMENTUM & OSCILLATOR ANALYSIS:
-- RSI (14) — overbought/oversold levels
-- Stochastic RSI — fast overbought/oversold
-- Stochastic Oscillator (14,3,3) — %K and %D crossover
-- MACD — histogram, signal line crossover
-- CCI (Commodity Channel Index) — extreme levels
-- Williams %R — overbought/oversold
-- Momentum Indicator — rate of price change
-- Awesome Oscillator — zero line crossover
-- Squeeze Momentum Indicator — low volatility breakout detection
+- RSI (14) overbought/oversold levels
+- Stochastic RSI fast overbought/oversold
+- Stochastic Oscillator (14,3,3) %K and %D crossover
+- MACD histogram, signal line crossover
+- CCI (Commodity Channel Index) extreme levels
+- Williams %R overbought/oversold
+- Momentum Indicator rate of price change
+- Awesome Oscillator zero line crossover
+- Squeeze Momentum Indicator low volatility breakout detection
 
 VOLATILITY ANALYSIS:
-- Bollinger Bands — squeeze, expansion, price at bands
-- ATR (Average True Range) — volatility level
-- Keltner Channels — price position relative to channels
-- Donchian Channels — breakout signals
+- Bollinger Bands squeeze, expansion, price at bands
+- ATR (Average True Range) volatility level
+- Keltner Channels price position relative to channels
+- Donchian Channels breakout signals
 
 VOLUME ANALYSIS:
-- VWAP (Volume Weighted Average Price) — price above/below VWAP
-- Volume Profile — high volume nodes and low volume nodes
-- OBV (On Balance Volume) — trend confirmation
-- MFI (Money Flow Index) — volume weighted RSI
+- VWAP (Volume Weighted Average Price) price above/below VWAP
+- Volume Profile high volume nodes and low volume nodes
+- OBV (On Balance Volume) trend confirmation
+- MFI (Money Flow Index) volume weighted RSI
 
 KEY LEVELS ANALYSIS:
-- Pivot Points (Daily/Weekly) — PP, R1, R2, S1, S2
+- Pivot Points (Daily/Weekly) PP, R1, R2, S1, S2
 - Fibonacci Retracement levels (0.236, 0.382, 0.5, 0.618, 0.786)
 - Fibonacci Extension levels (1.272, 1.618, 2.0)
 - Session High/Low (Asian, London, New York sessions)
@@ -142,12 +141,12 @@ KEY LEVELS ANALYSIS:
 PRICE ACTION & SMART MONEY ANALYSIS:
 - Break of Structure (BOS)
 - Change of Character (CHOCH)
-- Order Blocks (OB) — bullish and bearish
-- Fair Value Gaps (FVG) — imbalance zones
+- Order Blocks (OB) bullish and bearish
+- Fair Value Gaps (FVG) imbalance zones
 - Liquidity sweeps and stop hunts
 - Smart Money Concepts (SMC)
 - Wyckoff patterns (Accumulation/Distribution/Markup/Markdown)
-- Market Profile — price acceptance/rejection zones
+- Market Profile price acceptance/rejection zones
 
 MARKET STRUCTURE ANALYSIS:
 - Consolidation zones (ranges)
@@ -272,7 +271,7 @@ function parseGeminiResponse(text) {
   return result;
 }
 
-module.exports = function(bot, db, approvedUsers, bannedUsers) {
+module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT) {
 
   bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
@@ -280,25 +279,30 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
 
     if (bannedUsers.has(userId)) return;
 
-    if (!approvedUsers.has(userId)) {
-      await bot.sendMessage(chatId,
-        '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start'
-      );
-      return;
+    if (!isApproved(userId)) {
+      // Trial check
+      if (getTrialScreenshotLeft(userId) <= 0) {
+        sendVerifyPrompt(chatId);
+        return;
+      }
     }
 
-    const count = getUserCount(userId);
-    if (count >= DAILY_LIMIT && userId !== ADMIN_ID) {
-      await bot.sendMessage(chatId,
-        '📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n' +
-        '➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
-        { parse_mode: 'Markdown' }
-      );
-      return;
+    // Approved user daily limit check
+    if (isApproved(userId) && userId !== ADMIN_ID) {
+      const count = getUserCount(userId);
+      if (count >= 5) {
+        await bot.sendMessage(chatId,
+          '📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
     }
 
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
+
+    const trialInfo = isApproved(userId) ? '' : '\n📸 Screenshot বাকি: *' + (getTrialScreenshotLeft(userId) - 1) + '/' + FREE_TRIAL_SCREENSHOT + '*';
 
     const loadMsg = await bot.sendMessage(chatId,
       '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
@@ -355,15 +359,33 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
       if (signal.notAChart) {
         try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
         await bot.sendMessage(chatId,
-          '❌ *এটা trading chart না!*\n\n' +
-          '📸 শুধুমাত্র *Quotex chart screenshot* পাঠান।',
+          '❌ *এটা trading chart না!*\n\n📸 শুধুমাত্র *Quotex chart screenshot* পাঠান।',
           { parse_mode: 'Markdown' }
         );
         return;
       }
 
-      incrementUserCount(userId);
-      const remainingCount = userId === ADMIN_ID ? '∞' : String(DAILY_LIMIT - getUserCount(userId));
+      // Count increment
+      if (isApproved(userId)) {
+        incrementUserCount(userId);
+      } else {
+        await incrementTrialScreenshot(userId);
+        const left = getTrialScreenshotLeft(userId);
+        if (left === 0) {
+          await bot.sendMessage(chatId,
+            '⚠️ এটা আপনার *শেষ Free Trial screenshot!*\n\nVerify করুন unlimited access পেতে।',
+            { parse_mode: 'Markdown' }
+          );
+        }
+      }
+
+      const remainingCount = userId === ADMIN_ID
+        ? '∞'
+        : isApproved(userId)
+          ? String(5 - getUserCount(userId))
+          : String(getTrialScreenshotLeft(userId));
+
+      const limitLabel = isApproved(userId) ? 'আজকের বাকি' : 'Trial বাকি';
 
       const dirEmoji = signal.direction === 'UP' ? '⏫' : '⏬';
       let confEmoji = '🟡';
@@ -387,7 +409,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
         '══════════════════\n' +
         '💡 _' + signal.reason + '_\n' +
         '══════════════════\n' +
-        '📊 Remaining today: *' + remainingCount + '/' + DAILY_LIMIT + '*\n' +
+        '📸 ' + limitLabel + ': *' + remainingCount + '*\n' +
         '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
         { parse_mode: 'Markdown' }
       );
