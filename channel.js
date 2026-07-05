@@ -1,4 +1,4 @@
-// channel.js - Auto Signal with Market Open/Close Detection
+// channel.js - Auto Signal with Smart Market Detection
 const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
@@ -6,16 +6,15 @@ const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
 const CHECK_INTERVAL = 60 * 1000;
 
-// Live market pairs
-const livePairs = [
-  'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD',
-  'USD/CAD', 'USD/CHF', 'EUR/JPY', 'GBP/JPY'
-];
-
-// OTC pairs
-const otcPairs = [
-  'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC', 'AUD/USD OTC',
-  'EUR/GBP OTC', 'USD/CAD OTC', 'EUR/JPY OTC', 'GBP/JPY OTC'
+const pairMap = [
+  { live: 'EUR/USD', otc: 'EUR/USD OTC' },
+  { live: 'GBP/USD', otc: 'GBP/USD OTC' },
+  { live: 'USD/JPY', otc: 'USD/JPY OTC' },
+  { live: 'AUD/USD', otc: 'AUD/USD OTC' },
+  { live: 'USD/CAD', otc: 'USD/CAD OTC' },
+  { live: 'USD/CHF', otc: 'USD/CHF OTC' },
+  { live: 'EUR/JPY', otc: 'EUR/JPY OTC' },
+  { live: 'GBP/JPY', otc: 'GBP/JPY OTC' }
 ];
 
 function fetchJSON(url) {
@@ -31,16 +30,6 @@ function fetchJSON(url) {
   });
 }
 
-function isForexMarketOpen() {
-  const now = new Date();
-  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-  const day = bd.getUTCDay();
-  const hour = bd.getUTCHours();
-  if (day === 0) return false;
-  if (day === 6 && hour >= 5) return false;
-  return true;
-}
-
 function getBDTime() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
@@ -49,10 +38,24 @@ function getBDTime() {
   return { h, m };
 }
 
-async function getCandles1m(symbol) {
+function getEntryExpiry() {
+  const now = new Date();
+  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+  const h = bd.getUTCHours();
+  const m = bd.getUTCMinutes();
+  const entryM = m + 1;
+  const expiryM = m + 2;
+  return {
+    entry: String(h + Math.floor(entryM / 60)).padStart(2, '0') + ':' + String(entryM % 60).padStart(2, '0'),
+    expiry: String(h + Math.floor(expiryM / 60)).padStart(2, '0') + ':' + String(expiryM % 60).padStart(2, '0')
+  };
+}
+
+// API থেকে candle আনো — data আসলে live, না আসলে OTC
+async function getCandles(symbol) {
   const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
-  if (!data.values || data.values.length === 0) throw new Error('No data: ' + symbol);
+  if (!data.values || data.values.length === 0) throw new Error('No data');
   return data.values.map(v => ({
     open: parseFloat(v.open),
     high: parseFloat(v.high),
@@ -277,79 +280,79 @@ function analyzeTimeframe(candles) {
   return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
 }
 
-// Live market analysis
-async function analyzeLivePair(symbol) {
-  const candles1m = await getCandles1m(symbol);
-  const candles5m = buildHigherTF(candles1m, 5);
+// Smart analyze — API data আসলে live, না আসলে OTC
+async function smartAnalyze(pair) {
+  const liveSymbol = pair.live;
+  const otcName = pair.otc;
+  const liveName = pair.live;
 
+  let candles1m;
+  let isLive = false;
+
+  try {
+    candles1m = await getCandles(liveSymbol);
+    isLive = true;
+    console.log(liveSymbol + ' | Live data received ✅');
+  } catch (e) {
+    console.log(liveSymbol + ' | No live data — OTC mode 📊');
+    // OTC mode তেও same symbol দিয়ে try করবো
+    try {
+      candles1m = await getCandles(liveSymbol);
+    } catch (e2) {
+      console.log(liveSymbol + ' | Complete failure — skipping');
+      return null;
+    }
+  }
+
+  const candles5m = buildHigherTF(candles1m, 5);
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
 
-  console.log(`${symbol} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
+  const displayName = isLive ? liveName : otcName;
 
-  if (tf1m.direction !== tf5m.direction) { console.log(`${symbol} | Mixed — skipping`); return null; }
-  if (tf1m.volatility < 0.01) { console.log(`${symbol} | Low volatility — skipping`); return null; }
+  console.log(displayName + ' | 1m: ' + tf1m.direction + '(' + Math.round(tf1m.ratio * 100) + '%) | 5m: ' + tf5m.direction + '(' + Math.round(tf5m.ratio * 100) + '%)');
+
+  if (tf1m.direction !== tf5m.direction) {
+    console.log(displayName + ' | Mixed timeframes — skipping');
+    return null;
+  }
+
+  if (tf1m.volatility < 0.01) {
+    console.log(displayName + ' | Low volatility — skipping');
+    return null;
+  }
 
   const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
-  if (avgRatio < 0.70) { console.log(`${symbol} | Low confidence — skipping`); return null; }
+
+  if (avgRatio < 0.70) {
+    console.log(displayName + ' | Low confidence — skipping');
+    return null;
+  }
 
   let confidence, winRate;
   if (avgRatio >= 0.82) { confidence = 'Very High 🔥'; winRate = '85%'; }
   else if (avgRatio >= 0.75) { confidence = 'High 🟢'; winRate = '80%'; }
   else { confidence = 'Medium 🟡'; winRate = '75%'; }
 
+  const trendDesc = tf5m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
+
   return {
-    pair: symbol,
+    pair: displayName,
     direction: tf1m.direction,
     confidence,
     winRate,
-    trend: tf5m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend',
+    trend: trendDesc,
     signals: tf1m.signals.slice(0, 3).join(' • '),
     avgRatio: Math.round(avgRatio * 100),
     tf1m: Math.round(tf1m.ratio * 100),
     tf5m: Math.round(tf5m.ratio * 100),
     totalScore: tf1m.totalScore,
-    isLive: true
-  };
-}
-
-// OTC fallback signal
-function otcFallbackSignal(otcPair) {
-  const directions = ['UP', 'DOWN'];
-  const direction = directions[Math.floor(Math.random() * 2)];
-  const confidenceList = ['High 🟢', 'Medium 🟡'];
-  const confidence = confidenceList[Math.floor(Math.random() * 2)];
-  const winRate = confidence.includes('High') ? '80%' : '75%';
-  return {
-    pair: otcPair,
-    direction,
-    confidence,
-    winRate,
-    trend: direction === 'UP' ? 'Uptrend' : 'Downtrend',
-    signals: 'OTC Analysis • Price Action • Trend',
-    avgRatio: 75,
-    tf1m: 75,
-    tf5m: 75,
-    totalScore: 20,
-    isLive: false
-  };
-}
-
-function getEntryExpiry() {
-  const now = new Date();
-  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-  const h = bd.getUTCHours();
-  const m = bd.getUTCMinutes();
-  const entryM = m + 1;
-  const expiryM = m + 2;
-  return {
-    entry: String(h + Math.floor(entryM / 60)).padStart(2, '0') + ':' + String(entryM % 60).padStart(2, '0'),
-    expiry: String(h + Math.floor(expiryM / 60)).padStart(2, '0') + ':' + String(expiryM % 60).padStart(2, '0')
+    isLive
   };
 }
 
 module.exports = function(bot, newsModule) {
-  console.log('Channel auto signal started!');
+  console.log('Channel auto signal (Smart Market Detection) started!');
 
   let lastSentTime = 0;
   let lastMarketStatus = null;
@@ -362,75 +365,66 @@ module.exports = function(bot, newsModule) {
       return;
     }
 
-    const marketOpen = isForexMarketOpen();
-    const { h, m } = getBDTime();
-
-    // Market status change হলে admin কে notify
-    if (lastMarketStatus !== marketOpen) {
-      lastMarketStatus = marketOpen;
-      if (marketOpen) {
-        try {
-          await bot.sendMessage(ADMIN_ID,
-            '🟢 *Forex Market Open!*\n\n' +
-            '📊 AI Signal System চালু হয়েছে।\n' +
-            '⏰ BD Time: `' + h + ':' + m + '`\n\n' +
-            '✅ এখন থেকে Live Data দিয়ে signal পাঠাবে।',
-            { parse_mode: 'Markdown' }
-          );
-        } catch (e) {}
-      } else {
-        try {
-          await bot.sendMessage(ADMIN_ID,
-            '🔴 *Forex Market Closed!*\n\n' +
-            '😴 Live data পাওয়া যাচ্ছে না।\n' +
-            '⏰ BD Time: `' + h + ':' + m + '`\n\n' +
-            '📊 OTC signal চলতে থাকবে।',
-            { parse_mode: 'Markdown' }
-          );
-        } catch (e) {}
-      }
-    }
-
     const now = Date.now();
     const timeSinceLast = now - lastSentTime;
     if (lastSentTime > 0 && timeSinceLast < MIN_GAP) return;
     const forceCheck = lastSentTime > 0 && timeSinceLast >= MAX_GAP;
 
-    console.log('Scanning at BD Time: ' + h + ':' + m + ' | Market: ' + (marketOpen ? 'OPEN' : 'CLOSED'));
+    const { h, m } = getBDTime();
+    console.log('Smart scanning at BD Time: ' + h + ':' + m);
 
-    let results = [];
+    const results = [];
+    let anyLiveData = false;
 
-    if (marketOpen) {
-      // Live market analysis
-      for (const symbol of livePairs) {
-        try {
-          const result = await analyzeLivePair(symbol);
-          if (result) results.push(result);
-          await new Promise(r => setTimeout(r, 1500));
-        } catch (e) {
-          console.log('Live Error: ' + symbol + ' - ' + e.message);
+    for (const pair of pairMap) {
+      try {
+        const result = await smartAnalyze(pair);
+        if (result) {
+          results.push(result);
+          if (result.isLive) anyLiveData = true;
         }
+        await new Promise(r => setTimeout(r, 1500));
+      } catch (e) {
+        console.log('Error: ' + pair.live + ' - ' + e.message);
       }
-
-      // Live signal না পেলে OTC fallback
-      if (results.length === 0) {
-        console.log('No live signal — using OTC fallback');
-        const randomOTC = otcPairs[Math.floor(Math.random() * otcPairs.length)];
-        results.push(otcFallbackSignal(randomOTC));
-      }
-    } else {
-      // Market closed — random OTC signal
-      const randomOTC = otcPairs[Math.floor(Math.random() * otcPairs.length)];
-      results.push(otcFallbackSignal(randomOTC));
     }
 
+    // Market status change detect
+    const currentStatus = anyLiveData;
+    if (lastMarketStatus !== null && lastMarketStatus !== currentStatus) {
+      const { h: ah, m: am } = getBDTime();
+      if (currentStatus) {
+        // Market খুললো
+        try {
+          await bot.sendMessage(CHANNEL_ID,
+            '🟢 *Forex Market Open!*\n\n' +
+            '📊 Live Data পাওয়া যাচ্ছে।\n' +
+            '⏰ BD Time: `' + ah + ':' + am + '`\n\n' +
+            '✅ এখন থেকে Live Market Signal পাঠাবে।',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
+      } else {
+        // Market বন্ধ হলো
+        try {
+          await bot.sendMessage(CHANNEL_ID,
+            '🔴 *Forex Market Closed!*\n\n' +
+            '😴 Live data পাওয়া যাচ্ছে না।\n' +
+            '⏰ BD Time: `' + ah + ':' + am + '`\n\n' +
+            '📊 OTC Market Signal চলতে থাকবে।',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
+      }
+    }
+    lastMarketStatus = currentStatus;
+
     if (results.length === 0) {
-      console.log('No signal found.');
+      console.log('No confirmed signal found.');
       if (forceCheck) lastSentTime = Date.now();
       return;
     }
 
-    // Best signal বেছে নাও
     results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
     const { entry, expiry } = getEntryExpiry();
@@ -449,17 +443,14 @@ module.exports = function(bot, newsModule) {
       '🔀 *TREND* ➜ `' + best.trend + '`\n' +
       '🔗 *SIGNALS* ➜ `' + best.signals + '`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
-      (best.isLive ?
-        '📊 *Mode:* Live market Signal\n' +
-        '📈 *TF Analysis:*\n  1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n'
-        :
-        '📊 *Mode:* OTC Market Signal\n') +
+      '📊 *Mode:* ' + (best.isLive ? 'Live Market 🟢' : 'OTC Market 🔴') + '\n' +
+      '📈 *TF:* 1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n' +
       '━━━━━━━━━━━━━━━━━━\n' +
       '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
       { parse_mode: 'Markdown' }
     );
 
-    console.log('Signal sent: ' + best.pair + ' | ' + (best.isLive ? 'LIVE' : 'OTC') + ' | ' + best.confidence);
+    console.log('Signal sent: ' + best.pair + ' | ' + (best.isLive ? 'LIVE 🟢' : 'OTC 🔴') + ' | ' + best.confidence);
     lastSentTime = Date.now();
   }
 
