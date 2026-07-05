@@ -1,4 +1,4 @@
-// v18 - MongoDB + Maintenance Mode
+// v19 - Free Trial System
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const https = require('https');
@@ -9,6 +9,8 @@ const bot = new TelegramBot(TOKEN, { polling: false });
 
 const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = '3d31d53eb903483fb33d6854db50e0fd';
+const FREE_TRIAL_SIGNAL = 5;
+const FREE_TRIAL_SCREENSHOT = 5;
 
 let maintenanceMode = false;
 
@@ -16,6 +18,8 @@ let startedUsers = new Set();
 let approvedUsers = new Set([ADMIN_ID]);
 let bannedUsers = new Set();
 let submissions = [];
+const trialSignalCount = new Map();
+const trialScreenshotCount = new Map();
 
 const verifyMode = new Set();
 const passwordMode = new Map();
@@ -42,6 +46,13 @@ async function connectDB() {
 
   const subs = await db.collection('submissions').find().toArray();
   submissions = subs;
+
+  // Trial counts load
+  const tc = await db.collection('trialCounts').find().toArray();
+  tc.forEach(u => {
+    trialSignalCount.set(u.userId, u.signalCount || 0);
+    trialScreenshotCount.set(u.userId, u.screenshotCount || 0);
+  });
 }
 
 async function addStartedUser(userId) {
@@ -80,17 +91,56 @@ async function addSubmission(data) {
   await db.collection('submissions').insertOne(data);
 }
 
+async function incrementTrialSignal(userId) {
+  const current = trialSignalCount.get(userId) || 0;
+  trialSignalCount.set(userId, current + 1);
+  await db.collection('trialCounts').updateOne(
+    { userId }, { $set: { userId, signalCount: current + 1 } }, { upsert: true }
+  );
+}
+
+async function incrementTrialScreenshot(userId) {
+  const current = trialScreenshotCount.get(userId) || 0;
+  trialScreenshotCount.set(userId, current + 1);
+  await db.collection('trialCounts').updateOne(
+    { userId }, { $set: { userId, screenshotCount: current + 1 } }, { upsert: true }
+  );
+}
+
+function getTrialSignalLeft(userId) {
+  return FREE_TRIAL_SIGNAL - (trialSignalCount.get(userId) || 0);
+}
+
+function getTrialScreenshotLeft(userId) {
+  return FREE_TRIAL_SCREENSHOT - (trialScreenshotCount.get(userId) || 0);
+}
+
+function isApproved(userId) {
+  return userId === ADMIN_ID || approvedUsers.has(userId);
+}
+
 function generateApiKey() {
   const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-  let part1 = '';
-  let part2 = '';
+  let part1 = '', part2 = '';
   for (let i = 0; i < 2; i++) part1 += chars[Math.floor(Math.random() * chars.length)];
   for (let i = 0; i < 4; i++) part2 += chars[Math.floor(Math.random() * chars.length)];
   return `QX_${part1}${part2}_XAAN`;
 }
 
 const approvedKeyboard = {
-  keyboard: [[{ text: '➕ Generate New Signal 📊' }]],
+  keyboard: [
+    [{ text: '➕ Generate New Signal 📊' }],
+    [{ text: '📸 Screenshot Analysis' }]
+  ],
+  resize_keyboard: true,
+  persistent: true
+};
+
+const trialKeyboard = {
+  keyboard: [
+    [{ text: '➕ Generate New Signal 📊' }],
+    [{ text: '📸 Screenshot Analysis' }]
+  ],
   resize_keyboard: true,
   persistent: true
 };
@@ -240,20 +290,37 @@ function sendPairMenu(chatId) {
   });
 }
 
+function sendVerifyPrompt(chatId) {
+  bot.sendMessage(chatId,
+    '🔒 *Free Trial শেষ হয়েছে!*\n\n' +
+    '✅ আরো signal ও screenshot analysis পেতে *Verify* করুন।\n\n' +
+    '📌 নিচের লিংক থেকে Quotex account খুলে আপনার *8-digit Trader ID* পাঠান।',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
+          [{ text: '✅ Verify Trader ID', callback_data: '/verify' }]
+        ]
+      }
+    }
+  );
+}
+
 // /maintenance
 bot.onText(/\/maintenance (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const action = match[1].trim().toLowerCase();
   if (action === 'on') {
     maintenanceMode = true;
-    await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode চালু হয়েছে!*\n\n⛔ সব user এর access বন্ধ।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode চালু হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
+      try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' }); } catch (e) {}
     }
   } else if (action === 'off') {
     maintenanceMode = false;
-    await bot.sendMessage(ADMIN_ID, '✅ *Maintenance Mode বন্ধ হয়েছে!*\n\n🚀 Bot আবার চালু আছে।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(ADMIN_ID, '✅ *Maintenance Mode বন্ধ হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
       try { await bot.sendMessage(uid, '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
@@ -270,26 +337,50 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
   }
   if (bannedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে। Bot use করতে পারবেন না।');
+    await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।');
     return;
   }
   if (!startedUsers.has(userId)) {
     await addStartedUser(userId);
-    await bot.sendMessage(ADMIN_ID, '♻️ *NEW USER STARTED BOT* ➕\n\n👤 Name: ' + firstName + '\n🆔 ID: `' + userId + '`', { parse_mode: 'Markdown' });
+    await bot.sendMessage(ADMIN_ID,
+      '♻️ *NEW USER STARTED BOT* ➕\n\n👤 Name: ' + firstName + '\n🆔 ID: `' + userId + '`',
+      { parse_mode: 'Markdown' }
+    );
   }
-  if (userId === ADMIN_ID || approvedUsers.has(userId)) {
+
+  if (isApproved(userId)) {
     await bot.sendMessage(chatId,
       '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
     return;
   }
+
+  // Free trial user
+  const signalLeft = getTrialSignalLeft(userId);
+  const screenshotLeft = getTrialScreenshotLeft(userId);
+
+  if (signalLeft > 0 || screenshotLeft > 0) {
+    await bot.sendMessage(chatId,
+      '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n' +
+      '🎁 *Free Trial:*\n' +
+      '📊 Signal বাকি: *' + signalLeft + '/' + FREE_TRIAL_SIGNAL + '*\n' +
+      '📸 Screenshot বাকি: *' + screenshotLeft + '/' + FREE_TRIAL_SCREENSHOT + '*\n\n' +
+      '💡 Verify করলে unlimited access পাবেন!',
+      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
+    );
+    return;
+  }
+
+  // Trial শেষ
   await bot.sendMessage(chatId,
-    '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n✅ Verify করলেই সব feature unlock হবে।',
+    '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n' +
+    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n' +
+    '✅ Verify করলেই সব feature unlock হবে।',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -306,9 +397,9 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
-  if (userId !== ADMIN_ID && maintenanceMode) { await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ অপেক্ষা করুন।', { parse_mode: 'Markdown' }); return; }
+  if (userId !== ADMIN_ID && maintenanceMode) { await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*', { parse_mode: 'Markdown' }); return; }
   if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।'); return; }
-  if (!approvedUsers.has(userId)) { await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start'); return; }
+  if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
   sendPairMenu(chatId);
 });
 
@@ -395,7 +486,7 @@ bot.on('message', async (msg) => {
   if (!text || text.startsWith('/')) return;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
   }
   if (userId !== ADMIN_ID && bannedUsers.has(userId)) {
@@ -403,9 +494,25 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // Generate New Signal button
   if (text === '➕ Generate New Signal 📊') {
-    if (!approvedUsers.has(userId)) { await bot.sendMessage(chatId, '🔒 আপনার account verified না।'); return; }
+    if (!isApproved(userId)) {
+      if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    }
     sendPairMenu(chatId);
+    return;
+  }
+
+  // Screenshot Analysis button
+  if (text === '📸 Screenshot Analysis') {
+    if (!isApproved(userId)) {
+      if (getTrialScreenshotLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    }
+    await bot.sendMessage(chatId,
+      '📸 আপনার Quotex chart এর *screenshot* পাঠান:\n\n' +
+      (isApproved(userId) ? '' : '📊 Screenshot বাকি: *' + getTrialScreenshotLeft(userId) + '/' + FREE_TRIAL_SCREENSHOT + '*'),
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
@@ -460,7 +567,10 @@ bot.on('message', async (msg) => {
     if (text === correctPass) {
       passwordMode.delete(userId);
       await addApprovedUser(userId);
-      await bot.sendMessage(chatId, '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।', { parse_mode: 'Markdown', reply_markup: approvedKeyboard });
+      await bot.sendMessage(chatId,
+        '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
+        { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
+      );
     } else {
       await bot.sendMessage(chatId, '❌ ভুল API KEY! আবার চেষ্টা করুন।');
     }
@@ -481,7 +591,10 @@ bot.on('message', async (msg) => {
     '🔔 *NEW TRADER ID SUBMISSION*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n\n✅ Approve: `/approve ' + userId + '`',
     { parse_mode: 'Markdown' }
   );
-  await bot.sendMessage(chatId, '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n⏳ Admin verification এর জন্য অপেক্ষা করুন, শীঘ্রই আপনাকে জানানো হবে। 🔔', { parse_mode: 'Markdown' });
+  await bot.sendMessage(chatId,
+    '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n⏳ Admin verification এর জন্য অপেক্ষা করুন। 🔔',
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // Callback handler
@@ -492,7 +605,7 @@ bot.on('callback_query', async (query) => {
   bot.answerCallbackQuery(query.id);
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -503,7 +616,7 @@ bot.on('callback_query', async (query) => {
     if (maintenanceMode) {
       for (const uid of startedUsers) {
         if (uid === ADMIN_ID) continue;
-        try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে। অপেক্ষা করুন।', { parse_mode: 'Markdown' }); } catch (e) {}
+        try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' }); } catch (e) {}
       }
     } else {
       for (const uid of startedUsers) {
@@ -515,7 +628,10 @@ bot.on('callback_query', async (query) => {
   }
 
   if (pair === 'admin_total' && userId === ADMIN_ID) {
-    await bot.sendMessage(ADMIN_ID, '👥 *TOTAL USERS*\n\n📊 Total Started: `' + startedUsers.size + '`\n✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n🚫 Total Banned: `' + bannedUsers.size + '`\n📋 Total Submissions: `' + submissions.length + '`', { parse_mode: 'Markdown' });
+    await bot.sendMessage(ADMIN_ID,
+      '👥 *TOTAL USERS*\n\n📊 Total Started: `' + startedUsers.size + '`\n✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n🚫 Total Banned: `' + bannedUsers.size + '`\n📋 Total Submissions: `' + submissions.length + '`',
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
@@ -621,9 +737,14 @@ bot.on('callback_query', async (query) => {
 
   if (!pairs.includes(pair)) return;
 
-  if (!approvedUsers.has(userId)) {
-    await bot.sendMessage(chatId, '🔒 আপনার account verified না।\n\n✅ আগে Verify করুন — /start');
-    return;
+  // Signal — trial check
+  if (!isApproved(userId)) {
+    if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    await incrementTrialSignal(userId);
+    const left = getTrialSignalLeft(userId);
+    if (left === 0) {
+      await bot.sendMessage(chatId, '⚠️ এটা আপনার *শেষ Free Trial signal!*\n\nVerify করুন unlimited access পেতে।', { parse_mode: 'Markdown' });
+    }
   }
 
   const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
@@ -668,19 +789,20 @@ bot.on('callback_query', async (query) => {
   const exH = String(bd2.getUTCHours()).padStart(2, '0');
   const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
 
+  const trialInfo = isApproved(userId) ? '' : '\n📊 Signal বাকি: *' + getTrialSignalLeft(userId) + '/' + FREE_TRIAL_SIGNAL + '*';
+
   await bot.sendMessage(chatId,
     '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
     '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n══════════════════\n' +
     '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
-    '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
+    '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️' + trialInfo,
     { parse_mode: 'Markdown' }
   );
 });
 
-// ✅ DB connect হলেই সব module load হবে
 connectDB().then(() => {
-  console.log('Bot running v18 - Maintenance Mode Added...');
-  require('./screenshot')(bot, db, approvedUsers, bannedUsers);
+  console.log('Bot running v19 - Free Trial System Added...');
+  require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
   bot.startPolling();
