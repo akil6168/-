@@ -82,12 +82,11 @@ Reply with exactly: NOT_A_CHART
 If this IS a trading candlestick chart, proceed to STEP 2.
 
 STEP 2 - DEEP ANALYSIS:
-You are a world-class professional binary options and forex trader with 20+ years of experience. Analyze this OTC trading chart using EVERY possible technical analysis method.
+You are a world-class professional binary options and forex trader with 20+ years of experience. Analyze this OTC trading chart using EVERY possible technical analysis method available.
 
-Perform ALL analyses without exception:
-
-CANDLESTICK ANALYSIS:
-- Identify all patterns in last 10 candles: Doji, Hammer, Inverted Hammer, Shooting Star, Hanging Man, Spinning Top, Marubozu, Bullish/Bearish Engulfing, Piercing Line, Dark Cloud Cover, Morning Star, Evening Star, Three White Soldiers, Three Black Crows, Harami, Harami Cross, Tweezer Top/Bottom, Belt Hold, Counterattack, Rising/Falling Three Methods
+CANDLESTICK PATTERN ANALYSIS:
+- Identify all patterns in last 10 candles: Doji, Hammer, Inverted Hammer, Shooting Star, Hanging Man, Spinning Top, Marubozu, Bullish Engulfing, Bearish Engulfing, Piercing Line, Dark Cloud Cover, Morning Star, Evening Star, Three White Soldiers, Three Black Crows, Harami, Harami Cross, Tweezer Top/Bottom, Belt Hold, Counterattack, Rising/Falling Three Methods
+- Heikin Ashi candle pattern analysis (smoothed trend)
 - Body size analysis (large body = strong momentum, small body = indecision)
 - Wick/shadow analysis (long wick = rejection, no wick = strong momentum)
 - Color sequence of last 5 candles
@@ -98,69 +97,83 @@ TREND ANALYSIS:
 - Higher Highs Higher Lows (Uptrend confirmation)
 - Lower Highs Lower Lows (Downtrend confirmation)
 - Trend exhaustion signs
-- EMA/MA crossover if visible
-- Trend acceleration or deceleration
+- EMA crossover analysis (EMA 5, 10, 20, 50, 200)
+- SMA crossover analysis
+- Hull Moving Average (HMA) trend
+- ADX (Average Directional Index) — trend strength measurement
+- Supertrend indicator signal (UP/DOWN)
+- Parabolic SAR position (above/below price)
+- Ichimoku Cloud analysis (Tenkan, Kijun, Senkou Span A/B, Chikou)
 
-PRICE ACTION ANALYSIS:
+MOMENTUM & OSCILLATOR ANALYSIS:
+- RSI (14) — overbought/oversold levels
+- Stochastic RSI — fast overbought/oversold
+- Stochastic Oscillator (14,3,3) — %K and %D crossover
+- MACD — histogram, signal line crossover
+- CCI (Commodity Channel Index) — extreme levels
+- Williams %R — overbought/oversold
+- Momentum Indicator — rate of price change
+- Awesome Oscillator — zero line crossover
+- Squeeze Momentum Indicator — low volatility breakout detection
+
+VOLATILITY ANALYSIS:
+- Bollinger Bands — squeeze, expansion, price at bands
+- ATR (Average True Range) — volatility level
+- Keltner Channels — price position relative to channels
+- Donchian Channels — breakout signals
+
+VOLUME ANALYSIS:
+- VWAP (Volume Weighted Average Price) — price above/below VWAP
+- Volume Profile — high volume nodes and low volume nodes
+- OBV (On Balance Volume) — trend confirmation
+- MFI (Money Flow Index) — volume weighted RSI
+
+KEY LEVELS ANALYSIS:
+- Pivot Points (Daily/Weekly) — PP, R1, R2, S1, S2
+- Fibonacci Retracement levels (0.236, 0.382, 0.5, 0.618, 0.786)
+- Fibonacci Extension levels (1.272, 1.618, 2.0)
+- Session High/Low (Asian, London, New York sessions)
+- Previous Day High/Low as key reference levels
+- Major Support and Resistance levels
+- Dynamic Support/Resistance (moving averages as S/R)
+- S/R Flip signals
+- Round number psychological levels
+
+PRICE ACTION & SMART MONEY ANALYSIS:
 - Break of Structure (BOS)
 - Change of Character (CHOCH)
-- Order Blocks (OB)
-- Fair Value Gaps (FVG)
-- Imbalance zones
-- Liquidity sweeps
-- Stop hunt patterns
+- Order Blocks (OB) — bullish and bearish
+- Fair Value Gaps (FVG) — imbalance zones
+- Liquidity sweeps and stop hunts
 - Smart Money Concepts (SMC)
 - Wyckoff patterns (Accumulation/Distribution/Markup/Markdown)
+- Market Profile — price acceptance/rejection zones
 
-SUPPORT & RESISTANCE:
-- Major support levels
-- Major resistance levels
-- Dynamic support/resistance
-- Previous highs and lows as S/R
-- Round number levels
-- Is price at a key zone right now?
-- S/R flip signals
-
-MOMENTUM ANALYSIS:
-- Is momentum increasing or decreasing?
-- Momentum divergence signals
-- Price velocity (speed of movement)
-- Exhaustion candles
-- Climax buying/selling signs
-
-MARKET STRUCTURE:
+MARKET STRUCTURE ANALYSIS:
 - Consolidation zones (ranges)
 - Breakout or breakdown from range
 - Retest of broken levels
-- Flag, Pennant, Triangle patterns if visible
+- Flag, Pennant, Triangle patterns
 - Double Top/Bottom patterns
 - Head and Shoulders patterns
+- Regular and Hidden Divergence (RSI, MACD)
 
-REVERSAL SIGNALS:
-- Overextension from mean
-- Divergence patterns
-- Failed breakout signals
-- Pin bar reversals at key levels
-- Inside bar breakouts
-- Key level rejection candles
-
-VOLUME ANALYSIS (if visible):
-- High volume on breakouts
-- Low volume on retracements
-- Volume climax signals
-- Volume divergence
-
-FIBONACCI ANALYSIS (if visible):
-- Price at key Fibonacci levels (0.382, 0.5, 0.618)
-
-MULTI-TIMEFRAME CONFLUENCE:
-- Overall chart structure
-- Multiple factors aligning for same direction
-
+CONFLUENCE SCORING:
 After analyzing ALL factors:
-1. Count factors pointing UP
-2. Count factors pointing DOWN
-3. Give signal for direction with overwhelming confluence
+1. Count ALL factors pointing UP
+2. Count ALL factors pointing DOWN
+3. Calculate confluence percentage
+4. Give signal only for direction with overwhelming confluence (70%+ factors agreeing)
+
+Determine WIN_RATE based on confluence:
+- 70-75% confluence = WIN_RATE: 75%
+- 76-85% confluence = WIN_RATE: 80%
+- 86-100% confluence = WIN_RATE: 85%
+
+Determine CONFIDENCE based on confluence:
+- 70-75% = Medium
+- 76-85% = High
+- 86-100% = Very High
 
 Reply ONLY in this exact format, no asterisks, no extra text:
 DIRECTION: UP or DOWN
@@ -210,7 +223,6 @@ REASON: (2 sentence detailed explanation)`
 }
 
 function parseGeminiResponse(text) {
-  // Chart না হলে
   if (text.trim().toUpperCase().includes('NOT_A_CHART')) {
     return { notAChart: true };
   }
@@ -246,7 +258,6 @@ function parseGeminiResponse(text) {
     }
   }
 
-  // Direction fallback
   if (!result.direction) {
     const upper = text.toUpperCase();
     if (upper.includes('BULLISH') || upper.includes('BUY') || upper.includes('UPWARD')) {
@@ -293,7 +304,8 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
       '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
       '⏰ Signal দেওয়া হবে: *' + waitSeconds + ' seconds* পরে\n\n' +
       '🔍 Candlestick • Trend • Price Action\n' +
-      '📈 Support/Resistance • Momentum • SMC',
+      '📈 S/R • Momentum • SMC • Volume\n' +
+      '💡 ADX • Supertrend • Ichimoku • VWAP',
       { parse_mode: 'Markdown' }
     );
 
@@ -306,9 +318,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
           '🧠 *AI Deep Chart Analysis*\n\n' +
           '⏰ BD Time: *' + h + ':' + m + ':' + s + '*\n' +
           '⏳ Signal আসছে: *' + remaining + ' seconds* পরে\n\n' +
-          '🔍 Analyzing with ALL methods...\n' +
-          '📊 Candlestick • Trend • SMC • Wyckoff\n' +
-          '📈 S/R • Momentum • Price Action • Fibonacci',
+          '🔍 Candlestick • Heikin Ashi • SMC • Wyckoff\n' +
+          '📊 RSI • MACD • Stochastic • ADX • CCI\n' +
+          '📈 Ichimoku • Supertrend • VWAP • Volume Profile\n' +
+          '💡 Fibonacci • Pivot Points • Session Levels',
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
@@ -331,7 +344,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
       });
 
       const imageBase64 = imageData.toString('base64');
-
       const geminiPromise = analyzeChartWithGemini(imageBase64);
 
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
@@ -340,7 +352,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
 
-      // Chart না হলে
       if (signal.notAChart) {
         try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
         await bot.sendMessage(chatId,
@@ -376,7 +387,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers) {
         '══════════════════\n' +
         '💡 _' + signal.reason + '_\n' +
         '══════════════════\n' +
-        '📊 Remaining analysis today: *' + remainingCount + '/' + DAILY_LIMIT + '*\n' +
+        '📊 Remaining today: *' + remainingCount + '/' + DAILY_LIMIT + '*\n' +
         '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
         { parse_mode: 'Markdown' }
       );
