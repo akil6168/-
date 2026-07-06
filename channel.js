@@ -10,7 +10,7 @@ const CHECK_INTERVAL = 60 * 1000;
 const MIN_GAP = 5 * 60 * 1000;
 const MAX_GAP = 20 * 60 * 1000;
 const CONFIRM_LIMIT = 5;
-const STALE_MINUTES = 5;
+const STALE_MINUTES = 10;
 
 // ─── LOG SYSTEM ───
 function log(msg) {
@@ -557,7 +557,7 @@ function analyzeTimeframe(candles) {
   const ratio = total > 0 ? dominant / total : 0;
   const direction = up >= dn ? 'UP' : 'DOWN';
   const volatility = (atr / last) * 100;
-  const isStrongTrend = (trend.up >= 6 || trend.dn >= 6) && adx.adx > 20;
+  const isStrongTrend = (trend.up >= 5 || trend.dn >= 5) && adx.adx > 15;
 
   return { direction, ratio, up, dn, signals, volatility, total, isStrongTrend, trendDir: trend.dir, sideways: false };
 }
