@@ -3,8 +3,8 @@ const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
 const ADMIN_ID = 5724602667;
-const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || 'd29823ad0b3b436992411d122a8b64b6';
-const ALPHAVANTAGE_KEY = process.env.ALPHAVANTAGE_KEY || '74LRZJ0QI9C6LO0B';
+const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '2e75a72c47e046739c5ec519356f2dc4';
+const ALPHAVANTAGE_KEY = process.env.ALPHAVANTAGE_KEY || 'Y16H61XQEKUX1ZZ8';
 
 // ✅ Cache system — প্রতি pair এর জন্য আলাদা
 const candleCache = new Map();
