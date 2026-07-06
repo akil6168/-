@@ -28,6 +28,9 @@ const banMode = new Set();
 const unbanMode = new Set();
 const unapproveMode = new Set();
 
+// প্রতিটা user এর last signal message id store করার জন্য
+const lastSignalMsgId = new Map();
+
 let db;
 async function connectDB() {
   const client = new MongoClient(MONGO_URI);
@@ -47,7 +50,6 @@ async function connectDB() {
   const subs = await db.collection('submissions').find().toArray();
   submissions = subs;
 
-  // Trial counts load
   const tc = await db.collection('trialCounts').find().toArray();
   tc.forEach(u => {
     trialSignalCount.set(u.userId, u.signalCount || 0);
@@ -127,22 +129,20 @@ function generateApiKey() {
   return `QX_${part1}${part2}_XAAN`;
 }
 
-const approvedKeyboard = {
-  keyboard: [
-    [{ text: '➕ Generate New Signal 📊' }],
-    [{ text: '📸 Screenshot Analysis' }]
-  ],
-  resize_keyboard: true,
-  persistent: true
-};
+// নিচে কোনো keyboard নেই
+const approvedKeyboard = { remove_keyboard: true };
+const trialKeyboard = { remove_keyboard: true };
 
-const trialKeyboard = {
-  keyboard: [
-    [{ text: '➕ Generate New Signal 📊' }],
-    [{ text: '📸 Screenshot Analysis' }]
-  ],
-  resize_keyboard: true,
-  persistent: true
+// Signal message এর নিচে inline button
+const signalInlineKeyboard = {
+  inline_keyboard: [
+    [
+      { text: '➕ Generate New Signal 📊', callback_data: 'new_signal' },
+    ],
+    [
+      { text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }
+    ]
+  ]
 };
 
 const pairs = [
@@ -307,6 +307,36 @@ function sendVerifyPrompt(chatId) {
   );
 }
 
+// Loading bar steps
+const loadingSteps = [
+  { emoji: '📡', percent: 0,   bar: '░░░░░░░░░░', label: 'Connecting to live market...' },
+  { emoji: '📊', percent: 20,  bar: '██░░░░░░░░', label: 'Collecting price data...' },
+  { emoji: '📈', percent: 40,  bar: '████░░░░░░', label: 'Analyzing market trend...' },
+  { emoji: '🧠', percent: 60,  bar: '██████░░░░', label: 'Calculating indicators...' },
+  { emoji: '⚡', percent: 80,  bar: '████████░░', label: 'Finding best entry...' },
+  { emoji: '🔍', percent: 100, bar: '██████████', label: 'Final confirmation...' }
+];
+
+async function runLoadingBar(chatId) {
+  const msg = await bot.sendMessage(chatId,
+    '📡 MARKET ANALYSING...\n\n[░░░░░░░░░░] 0%\nConnecting to live market...'
+  );
+  const msgId = msg.message_id;
+
+  for (let i = 1; i < loadingSteps.length; i++) {
+    await new Promise(r => setTimeout(r, 500));
+    const s = loadingSteps[i];
+    try {
+      await bot.editMessageText(
+        s.emoji + ' MARKET ANALYSING...\n\n[' + s.bar + '] ' + s.percent + '%\n' + s.label,
+        { chat_id: chatId, message_id: msgId }
+      );
+    } catch (e) {}
+  }
+
+  return msgId;
+}
+
 // /maintenance
 bot.onText(/\/maintenance (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
@@ -355,12 +385,22 @@ bot.onText(/\/start/, async (msg) => {
   if (isApproved(userId)) {
     await bot.sendMessage(chatId,
       '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
-      { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
+      {
+        parse_mode: 'Markdown',
+        reply_markup: approvedKeyboard
+      }
     );
+    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
+          [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+        ]
+      }
+    });
     return;
   }
 
-  // Free trial user
   const signalLeft = getTrialSignalLeft(userId);
   const screenshotLeft = getTrialScreenshotLeft(userId);
 
@@ -371,12 +411,22 @@ bot.onText(/\/start/, async (msg) => {
       '📊 Signal বাকি: *' + signalLeft + '/' + FREE_TRIAL_SIGNAL + '*\n' +
       '📸 Screenshot বাকি: *' + screenshotLeft + '/' + FREE_TRIAL_SCREENSHOT + '*\n\n' +
       '💡 Verify করলে unlimited access পাবেন!',
-      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
+      {
+        parse_mode: 'Markdown',
+        reply_markup: trialKeyboard
+      }
     );
+    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
+          [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+        ]
+      }
+    });
     return;
   }
 
-  // Trial শেষ
   await bot.sendMessage(chatId,
     '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n' +
     '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n' +
@@ -494,27 +544,7 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Generate New Signal button
-  if (text === '➕ Generate New Signal 📊') {
-    if (!isApproved(userId)) {
-      if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
-    }
-    sendPairMenu(chatId);
-    return;
-  }
 
-  // Screenshot Analysis button
-  if (text === '📸 Screenshot Analysis') {
-    if (!isApproved(userId)) {
-      if (getTrialScreenshotLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
-    }
-    await bot.sendMessage(chatId,
-      '📸 আপনার Quotex chart এর *screenshot* পাঠান:\n\n' +
-      (isApproved(userId) ? '' : '📊 Screenshot বাকি: *' + getTrialScreenshotLeft(userId) + '/' + FREE_TRIAL_SCREENSHOT + '*'),
-      { parse_mode: 'Markdown' }
-    );
-    return;
-  }
 
   if (broadcastMode.has(userId) && userId === ADMIN_ID) {
     broadcastMode.delete(userId);
@@ -571,6 +601,14 @@ bot.on('message', async (msg) => {
         '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
         { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
+      await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
+            [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+          ]
+        }
+      });
     } else {
       await bot.sendMessage(chatId, '❌ ভুল API KEY! আবার চেষ্টা করুন।');
     }
@@ -597,6 +635,81 @@ bot.on('message', async (msg) => {
   );
 });
 
+// Signal generate করার common function
+async function generateSignalForPair(chatId, userId, pair) {
+  // আগের signal message delete করা
+  if (lastSignalMsgId.has(userId)) {
+    try { await bot.deleteMessage(chatId, lastSignalMsgId.get(userId)); } catch (e) {}
+    lastSignalMsgId.delete(userId);
+  }
+
+  // Trial check
+  if (!isApproved(userId)) {
+    if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    await incrementTrialSignal(userId);
+    const left = getTrialSignalLeft(userId);
+    if (left === 0) {
+      await bot.sendMessage(chatId, '⚠️ এটা আপনার *শেষ Free Trial signal!*\n\nVerify করুন unlimited access পেতে।', { parse_mode: 'Markdown' });
+    }
+  }
+
+  // Loading bar
+  const loadMsgId = await runLoadingBar(chatId);
+
+  // Clock
+  const clockMsg = await bot.sendMessage(chatId, '🕐 Signal generating...\n\n⏰ Bangladesh Time: --:--:--');
+  const clockId = clockMsg.message_id;
+  await new Promise((resolve) => {
+    const clockInterval = setInterval(async () => {
+      const now = new Date();
+      const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+      const h = String(bd.getUTCHours()).padStart(2, '0');
+      const m = String(bd.getUTCMinutes()).padStart(2, '0');
+      const s = String(bd.getUTCSeconds()).padStart(2, '0');
+      try {
+        await bot.editMessageText(
+          '🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
+          { chat_id: chatId, message_id: clockId }
+        );
+      } catch (e) {}
+      if (bd.getUTCSeconds() === 58) { clearInterval(clockInterval); resolve(); }
+    }, 1000);
+  });
+
+  try { await bot.deleteMessage(chatId, loadMsgId); } catch (e) {}
+  try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
+
+  let signal;
+  try {
+    signal = await analyzeSignal(pair);
+  } catch (e) {
+    const directions = ['UP⏫', 'DOWN⏬'];
+    signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%' };
+  }
+
+  const now2 = new Date();
+  const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
+  bd2.setMinutes(bd2.getMinutes() + 1);
+  const exH = String(bd2.getUTCHours()).padStart(2, '0');
+  const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
+
+  const trialInfo = isApproved(userId) ? '' : '\n📊 Signal বাকি: *' + getTrialSignalLeft(userId) + '/' + FREE_TRIAL_SIGNAL + '*';
+
+  const sentMsg = await bot.sendMessage(chatId,
+    '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
+    '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n══════════════════\n' +
+    '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
+    '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️' + trialInfo,
+    {
+      parse_mode: 'Markdown',
+      reply_markup: signalInlineKeyboard
+    }
+  );
+
+  // নতুন signal message id save করা
+  lastSignalMsgId.set(userId, sentMsg.message_id);
+}
+
 // Callback handler
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
@@ -606,6 +719,26 @@ bot.on('callback_query', async (query) => {
 
   if (userId !== ADMIN_ID && maintenanceMode) {
     await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  // New signal button
+  if (pair === 'new_signal') {
+    if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    sendPairMenu(chatId);
+    return;
+  }
+
+  // Screenshot analysis button
+  if (pair === 'screenshot_analysis') {
+    if (!isApproved(userId)) {
+      if (getTrialScreenshotLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+    }
+    await bot.sendMessage(chatId,
+      '📸 আপনার Quotex chart এর *screenshot* পাঠান:\n\n' +
+      (isApproved(userId) ? '' : '📊 Screenshot বাকি: *' + getTrialScreenshotLeft(userId) + '/' + FREE_TRIAL_SCREENSHOT + '*'),
+      { parse_mode: 'Markdown' }
+    );
     return;
   }
 
@@ -737,72 +870,14 @@ bot.on('callback_query', async (query) => {
 
   if (!pairs.includes(pair)) return;
 
-  // Signal — trial check
-  if (!isApproved(userId)) {
-    if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
-    await incrementTrialSignal(userId);
-    const left = getTrialSignalLeft(userId);
-    if (left === 0) {
-      await bot.sendMessage(chatId, '⚠️ এটা আপনার *শেষ Free Trial signal!*\n\nVerify করুন unlimited access পেতে।', { parse_mode: 'Markdown' });
-    }
-  }
+  if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
 
-  const loadMsg = await bot.sendMessage(chatId, '⏳ Loading signal generation....\n\n0 / 100');
-  const loadId = loadMsg.message_id;
-  let count = 0;
-  await new Promise((resolve) => {
-    const loadInterval = setInterval(async () => {
-      count++;
-      try { await bot.editMessageText('⏳ Loading signal generation....\n\n' + count + ' / 100', { chat_id: chatId, message_id: loadId }); } catch (e) {}
-      if (count >= 100) { clearInterval(loadInterval); resolve(); }
-    }, 30);
-  });
-
-  const clockMsg = await bot.sendMessage(chatId, '🕐 Signal generating...\n\n⏰ Bangladesh Time: --:--:--');
-  const clockId = clockMsg.message_id;
-  await new Promise((resolve) => {
-    const clockInterval = setInterval(async () => {
-      const now = new Date();
-      const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-      const h = String(bd.getUTCHours()).padStart(2, '0');
-      const m = String(bd.getUTCMinutes()).padStart(2, '0');
-      const s = String(bd.getUTCSeconds()).padStart(2, '0');
-      try { await bot.editMessageText('🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s, { chat_id: chatId, message_id: clockId }); } catch (e) {}
-      if (bd.getUTCSeconds() === 58) { clearInterval(clockInterval); resolve(); }
-    }, 1000);
-  });
-
-  try { await bot.deleteMessage(chatId, loadId); } catch (e) {}
-  try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
-
-  let signal;
-  try {
-    signal = await analyzeSignal(pair);
-  } catch (e) {
-    const directions = ['UP⏫', 'DOWN⏬'];
-    signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%', trend: 'N/A', rsi: 'N/A', pattern: 'N/A' };
-  }
-
-  const now2 = new Date();
-  const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
-  bd2.setMinutes(bd2.getMinutes() + 1);
-  const exH = String(bd2.getUTCHours()).padStart(2, '0');
-  const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
-
-  const trialInfo = isApproved(userId) ? '' : '\n📊 Signal বাকি: *' + getTrialSignalLeft(userId) + '/' + FREE_TRIAL_SIGNAL + '*';
-
-  await bot.sendMessage(chatId,
-    '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
-    '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🔹 *EXPIRY* ➜ `' + exH + ':' + exM + '`\n══════════════════\n' +
-    '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
-    '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️' + trialInfo,
-    { parse_mode: 'Markdown' }
-  );
+  await generateSignalForPair(chatId, userId, pair);
 });
 
 connectDB().then(() => {
   console.log('Bot running v19 - Free Trial System Added...');
-  require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT);
+  require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
   bot.startPolling();
