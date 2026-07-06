@@ -1,14 +1,15 @@
-// channel.js - Qx AI Predictor VIP (Combined Best Version)
+// channel.js - Qx AI Predictor VIP
 const https = require('https');
 
 const CHANNEL_ID = '-1002427080688';
 const ADMIN_ID = 5724602667;
-const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || 'YOUR_API_KEY';
+const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || '3d31d53eb903483fb33d6854db50e0fd';
 
-const CHECK_INTERVAL = 60 * 1000;   // প্রতি ১ মিনিটে scan
-const MIN_GAP = 5 * 60 * 1000;      // minimum 5 মিনিট
-const MAX_GAP = 20 * 60 * 1000;     // maximum 20 মিনিট
-const CONFIRM_LIMIT = 5;            // ৫ বার confirm হলে market open/closed
+const CHECK_INTERVAL = 60 * 1000;
+const MIN_GAP = 5 * 60 * 1000;
+const MAX_GAP = 20 * 60 * 1000;
+const CONFIRM_LIMIT = 5;
+const STALE_MINUTES = 5; // candle এর বেশি পুরনো হলে stale
 
 const pairMap = [
   { live: 'EUR/USD', otc: 'EUR/USD OTC', flag: '🇪🇺🇺🇸' },
@@ -21,19 +22,22 @@ const pairMap = [
   { live: 'GBP/JPY', otc: 'GBP/JPY OTC', flag: '🇬🇧🇯🇵' }
 ];
 
-// State
 let lastSentTime = 0;
 let lastMarketStatus = null;
 let liveCount = 0;
 let noLiveCount = 0;
-let lastSignalKey = ''; // Duplicate filter: "PAIR_DIRECTION"
+let lastSignalKey = '';
 
-// ─────────────────── TIME ───────────────────
+// ─── TIME ───
 function getBDTime() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
   return {
     h: String(bd.getUTCHours()).padStart(2, '0'),
-    m: String(bd.getUTCMinutes()).padStart(2, '0')
+    m: String(bd.getUTCMinutes()).padStart(2, '0'),
+    day: bd.getUTCDay(),
+    hour: bd.getUTCHours(),
+    minute: bd.getUTCMinutes(),
+    bd
   };
 }
 
@@ -41,17 +45,36 @@ function getEntryExpiry() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
   const h = bd.getUTCHours();
   const m = bd.getUTCMinutes();
-  const eM = m + 1;
-  const xM = m + 2;
-  const eH = h + Math.floor(eM / 60);
-  const xH = h + Math.floor(xM / 60);
+  const eM = m + 1, xM = m + 2;
   return {
-    entry: `${String(eH % 24).padStart(2, '0')}:${String(eM % 60).padStart(2, '0')}`,
-    expiry: `${String(xH % 24).padStart(2, '0')}:${String(xM % 60).padStart(2, '0')}`
+    entry: `${String((h + Math.floor(eM / 60)) % 24).padStart(2, '0')}:${String(eM % 60).padStart(2, '0')}`,
+    expiry: `${String((h + Math.floor(xM / 60)) % 24).padStart(2, '0')}:${String(xM % 60).padStart(2, '0')}`
   };
 }
 
-// ─────────────────── API ───────────────────
+// ─── Weekend Check ───
+// শুক্র রাত ১২:০০ AM (day=6, hour=0) → সোমবার ভোর ৬:০০ AM (day=1, hour=6)
+function isWeekendBlock() {
+  const { day, hour, minute } = getBDTime();
+  // শনিবার সারাদিন (day=6)
+  if (day === 6) return true;
+  // রবিবার সারাদিন (day=0)
+  if (day === 0) return true;
+  // শুক্রবার রাত ১২:০০ AM মানে শনিবার শুরু — আগেই cover
+  // সোমবার ভোর ৬:০০ AM এর আগে (day=1, hour<6)
+  if (day === 1 && hour < 6) return true;
+  return false;
+}
+
+// ─── Rollover Check (রাত ১১:৫৮ - ১২:০২) ───
+function isRolloverTime() {
+  const { hour, minute } = getBDTime();
+  if (hour === 23 && minute >= 58) return true;
+  if (hour === 0 && minute <= 2) return true;
+  return false;
+}
+
+// ─── API ───
 function fetchJSON(url) {
   return new Promise((resolve, reject) => {
     https.get(url, (res) => {
@@ -68,6 +91,15 @@ async function getCandles(symbol) {
   const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
   const data = await fetchJSON(url);
   if (!data.values || !data.values.length) throw new Error('No data');
+
+  // Stale data check — সর্বশেষ candle এর time
+  const lastCandleTime = new Date(data.values[0].datetime + ' UTC');
+  const nowUTC = new Date();
+  const diffMinutes = (nowUTC - lastCandleTime) / (60 * 1000);
+  if (diffMinutes > STALE_MINUTES) {
+    throw new Error('Stale data: ' + Math.round(diffMinutes) + ' min old');
+  }
+
   return data.values.map(v => ({
     open: +v.open, high: +v.high, low: +v.low,
     close: +v.close, volume: +v.volume || 0
@@ -89,7 +121,7 @@ function buildHigherTF(candles1m, period) {
   return result;
 }
 
-// ─────────────────── INDICATORS ───────────────────
+// ─── INDICATORS ───
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let gain = 0, loss = 0;
@@ -97,8 +129,7 @@ function calcRSI(candles, period = 14) {
     const d = candles[i].close - candles[i - 1].close;
     d > 0 ? gain += d : loss += Math.abs(d);
   }
-  const rs = gain / (loss || 1);
-  return 100 - (100 / (1 + rs));
+  return 100 - (100 / (1 + gain / (loss || 1)));
 }
 
 function calcEMA(candles, period) {
@@ -180,6 +211,10 @@ function calcCandlePattern(candles) {
     return { pattern: 'Three Black Crows', dir: 'DOWN', str: 4 };
   if (body < range * 0.1)
     return { pattern: 'Doji', dir: 'NEUTRAL', str: 1 };
+  if (bull && upWick < body * 0.05 && dnWick < body * 0.05)
+    return { pattern: 'Bullish Marubozu', dir: 'UP', str: 3 };
+  if (bear && upWick < body * 0.05 && dnWick < body * 0.05)
+    return { pattern: 'Bearish Marubozu', dir: 'DOWN', str: 3 };
   if (c.high > p.high && c.low > p.low && p.high > p2.high)
     return { pattern: 'Higher High Uptrend', dir: 'UP', str: 2 };
   if (c.high < p.high && c.low < p.low && p.low < p2.low)
@@ -216,7 +251,6 @@ function calcVolume(candles) {
   return { dir: 'NEUTRAL', str: 0 };
 }
 
-// ─────────────────── FULL ANALYSIS ───────────────────
 function analyzeTimeframe(candles) {
   const rsi = calcRSI(candles);
   const rsi7 = calcRSI(candles, 7);
@@ -233,43 +267,33 @@ function analyzeTimeframe(candles) {
   let up = 0, dn = 0;
   const signals = [];
 
-  // RSI 14
   if (rsi < 30) { up += 3; signals.push('RSI Oversold'); }
   else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
   else if (rsi < 45) up += 1;
   else if (rsi > 55) dn += 1;
 
-  // RSI 7
   if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); }
   else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
 
-  // StochRSI
   if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); }
   else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
 
-  // MACD
   if (macd > 0) { up += 2; signals.push('MACD Bullish'); }
   else { dn += 2; signals.push('MACD Bearish'); }
 
-  // Bollinger
   if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); }
   else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
 
-  // EMA Trend
-  up += trend.up;
-  dn += trend.dn;
+  up += trend.up; dn += trend.dn;
   if (trend.dir === 'UP') signals.push('EMA Bullish');
   else signals.push('EMA Bearish');
 
-  // Candle Pattern
   if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); }
   else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
-  // S/R
   if (sr.distSup < 0.1) { up += 3; signals.push('At Support'); }
   if (sr.distRes < 0.1) { dn += 3; signals.push('At Resistance'); }
 
-  // Volume
   if (vol.dir === 'UP') { up += vol.str; signals.push('Volume Bullish'); }
   else if (vol.dir === 'DOWN') { dn += vol.str; signals.push('Volume Bearish'); }
 
@@ -278,14 +302,12 @@ function analyzeTimeframe(candles) {
   const ratio = total > 0 ? dominant / total : 0;
   const direction = up >= dn ? 'UP' : 'DOWN';
   const volatility = (atr / last) * 100;
-
-  // Strong trend check: EMA alignment
   const isStrongTrend = (trend.up >= 6 || trend.dn >= 6);
 
   return { direction, ratio, up, dn, signals, volatility, total, isStrongTrend, trendDir: trend.dir };
 }
 
-// ─────────────────── SMART ANALYZE ───────────────────
+// ─── SMART ANALYZE ───
 async function smartAnalyze(pair) {
   let candles1m;
   let isLive = false;
@@ -293,8 +315,12 @@ async function smartAnalyze(pair) {
   try {
     candles1m = await getCandles(pair.live);
     isLive = true;
-  } catch {
-    return null; // live data নেই = OTC signal দেব না এই pair এ
+    console.log(pair.live + ' | ✅ Live data');
+  } catch (e) {
+    console.log(pair.live + ' | ❌ ' + e.message + ' → OTC mode');
+    // OTC mode — same symbol try করবো না, skip করবো
+    // OTC তে signal দিতে চাইলে আলাদা handle করা হবে
+    return { isLive: false, failed: true, pair: pair.otc, flag: pair.flag };
   }
 
   const candles5m = buildHigherTF(candles1m, 5);
@@ -303,19 +329,19 @@ async function smartAnalyze(pair) {
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
 
-  // ✅ Strong Trend Filter
+  // Strong Trend Filter
   if (!tf1m.isStrongTrend) {
     console.log(pair.live + ' | Weak trend — skip');
     return null;
   }
 
-  // ✅ Multi-TF Direction must match
+  // Multi-TF Direction match
   if (tf1m.direction !== tf5m.direction) {
     console.log(pair.live + ' | Mixed TF — skip');
     return null;
   }
 
-  // ✅ Low volatility filter
+  // Low volatility filter
   if (tf1m.volatility < 0.01) {
     console.log(pair.live + ' | Low volatility — skip');
     return null;
@@ -324,7 +350,7 @@ async function smartAnalyze(pair) {
   const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
   const aiScore = Math.round(avgRatio * 100);
 
-  // ✅ Minimum Confidence: only High + Very High
+  // Medium confidence skip
   let confidence;
   if (avgRatio >= 0.82) confidence = 'Very High 🔥';
   else if (avgRatio >= 0.75) confidence = 'High 🟢';
@@ -337,6 +363,7 @@ async function smartAnalyze(pair) {
 
   return {
     pair: pair.live,
+    otcPair: pair.otc,
     flag: pair.flag,
     direction: tf1m.direction,
     confidence,
@@ -347,11 +374,59 @@ async function smartAnalyze(pair) {
     tf1m: Math.round(tf1m.ratio * 100),
     tf5m: Math.round(tf5m.ratio * 100),
     total: tf1m.total,
-    isLive
+    isLive: true,
+    failed: false
   };
 }
 
-// ─────────────────── SIGNAL MESSAGE ───────────────────
+// ─── OTC ANALYZE (Live market বন্ধ থাকলে) ───
+async function otcAnalyze(pair) {
+  let candles1m;
+  try {
+    candles1m = await getCandles(pair.live);
+  } catch (e) {
+    console.log(pair.otc + ' | OTC data also failed — skip');
+    return null;
+  }
+
+  const candles5m = buildHigherTF(candles1m, 5);
+  if (candles5m.length < 3) return null;
+
+  const tf1m = analyzeTimeframe(candles1m);
+  const tf5m = analyzeTimeframe(candles5m);
+
+  if (!tf1m.isStrongTrend) return null;
+  if (tf1m.direction !== tf5m.direction) return null;
+  if (tf1m.volatility < 0.01) return null;
+
+  const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
+  const aiScore = Math.round(avgRatio * 100);
+
+  let confidence;
+  if (avgRatio >= 0.82) confidence = 'Very High 🔥';
+  else if (avgRatio >= 0.75) confidence = 'High 🟢';
+  else return null;
+
+  const trendDesc = tf1m.direction === 'UP' ? 'Strong Uptrend 📈' : 'Strong Downtrend 📉';
+
+  return {
+    pair: pair.otc,
+    flag: pair.flag,
+    direction: tf1m.direction,
+    confidence,
+    aiScore,
+    trend: trendDesc,
+    signals: tf1m.signals.slice(0, 3),
+    avgRatio,
+    tf1m: Math.round(tf1m.ratio * 100),
+    tf5m: Math.round(tf5m.ratio * 100),
+    total: tf1m.total,
+    isLive: false,
+    failed: false
+  };
+}
+
+// ─── SIGNAL MESSAGE ───
 function buildSignalMessage(best, entry, expiry) {
   const dirEmoji = best.direction === 'UP' ? '⏫' : '⏬';
   const dirLabel = best.direction === 'UP' ? '🟢 BUY' : '🔴 SELL';
@@ -371,7 +446,7 @@ function buildSignalMessage(best, entry, expiry) {
     `🔥 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘  ➜ ${best.confidence}\n` +
     `📊 𝗧𝗥𝗘𝗡𝗗        ➜ ${best.trend}\n` +
     `🌐 𝗠𝗔𝗥𝗞𝗘𝗧      ➜ ${marketMode}\n` +
-    `✅ 𝗦𝗧𝗔𝗧𝗨𝗦      ➜ Confirmed Signal\n` +
+    `⚡ 𝗦𝗧𝗔𝗧𝗨𝗦      ➜ ✅ Confirmed Signal\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `📌 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n` +
     `${analysisLines}\n` +
@@ -386,14 +461,26 @@ function buildSignalMessage(best, entry, expiry) {
   );
 }
 
-// ─────────────────── MAIN MODULE ───────────────────
-module.exports = function (bot, newsModule) {
-  console.log('✅ Qx AI Predictor VIP channel module started!');
+// ─── MAIN ───
+module.exports = function(bot, newsModule) {
+  console.log('✅ Qx AI Predictor VIP channel started!');
 
   async function run() {
-    // News active হলে signal বন্ধ
+    // News active হলে skip
     if (newsModule && newsModule.isNewsActive()) {
       console.log('📰 News active — signal skipped');
+      return;
+    }
+
+    // Weekend block check
+    if (isWeekendBlock()) {
+      console.log('🔴 Weekend block — scan skipped');
+      return;
+    }
+
+    // Rollover time check
+    if (isRolloverTime()) {
+      console.log('⏸ Rollover time — scan skipped');
       return;
     }
 
@@ -411,21 +498,32 @@ module.exports = function (bot, newsModule) {
 
     const results = [];
     let anyLive = false;
+    let allFailed = true;
 
     for (const pair of pairMap) {
       try {
         const res = await smartAnalyze(pair);
-        if (res) {
+        if (res && !res.failed) {
           results.push(res);
           if (res.isLive) anyLive = true;
+          allFailed = false;
+        } else if (res && res.failed) {
+          // Live data নেই — OTC analyze করবো
+          const otcRes = await otcAnalyze(pair);
+          if (otcRes) {
+            results.push(otcRes);
+            allFailed = false;
+          }
+        } else {
+          allFailed = false; // data এসেছে কিন্তু signal নেই
         }
-        await new Promise(r => setTimeout(r, 1200)); // rate limit
+        await new Promise(r => setTimeout(r, 1200));
       } catch (e) {
         console.log('Error: ' + pair.live + ' — ' + e.message);
       }
     }
 
-    // ─── Market Open/Close Detection (CONFIRM_LIMIT = 5) ───
+    // Market Open/Close Detection (৫ বার confirm)
     if (anyLive) {
       liveCount++;
       noLiveCount = 0;
@@ -434,15 +532,17 @@ module.exports = function (bot, newsModule) {
       liveCount = 0;
     }
 
-    const bd = getBDTime();
+    const { h: ah, m: am } = getBDTime();
 
     if (liveCount >= CONFIRM_LIMIT && lastMarketStatus !== true) {
       lastMarketStatus = true;
+      liveCount = 0;
       try {
         await bot.sendMessage(ADMIN_ID,
-          `🟢 *Quotex Market OPEN CONFIRMED*\n\n` +
+          `🟢 *Quotex Market OPEN*\n\n` +
           `📊 পরপর ${CONFIRM_LIMIT} বার Live Data পাওয়া গেছে\n` +
-          `⏰ BD Time: ${bd.h}:${bd.m}`,
+          `⏰ BD Time: \`${ah}:${am}\`\n\n` +
+          `✅ Live Signal চালু হয়েছে।`,
           { parse_mode: 'Markdown' }
         );
       } catch (e) {}
@@ -450,30 +550,28 @@ module.exports = function (bot, newsModule) {
 
     if (noLiveCount >= CONFIRM_LIMIT && lastMarketStatus !== false) {
       lastMarketStatus = false;
+      noLiveCount = 0;
       try {
         await bot.sendMessage(ADMIN_ID,
-          `🔴 *Quotex Market CLOSED CONFIRMED*\n\n` +
+          `🔴 *Quotex Market CLOSED*\n\n` +
           `😴 পরপর ${CONFIRM_LIMIT} বার Live Data পাওয়া যায়নি\n` +
-          `⏰ BD Time: ${bd.h}:${bd.m}`,
+          `⏰ BD Time: \`${ah}:${am}\`\n\n` +
+          `📊 OTC Signal চলছে।`,
           { parse_mode: 'Markdown' }
         );
       } catch (e) {}
     }
 
-    // ─── No results ───
     if (!results.length) {
-      // Max gap পার হলে force log
-      if (lastSentTime > 0 && elapsed >= MAX_GAP) {
-        console.log('⚠️ Max gap reached but no good signal found. Waiting...');
-      }
+      console.log('❌ No confirmed signal found.');
       return;
     }
 
-    // Best signal বেছে নাও (highest AI score)
+    // Best signal বেছে নাও
     results.sort((a, b) => b.avgRatio - a.avgRatio || b.total - a.total);
     const best = results[0];
 
-    // ✅ Duplicate Filter: same pair + same direction skip
+    // Duplicate Filter
     const signalKey = `${best.pair}_${best.direction}`;
     if (signalKey === lastSignalKey && elapsed < MAX_GAP) {
       console.log(`🔁 Duplicate signal (${signalKey}) — skip`);
@@ -487,13 +585,12 @@ module.exports = function (bot, newsModule) {
       await bot.sendMessage(CHANNEL_ID, msg, { parse_mode: 'Markdown' });
       lastSentTime = Date.now();
       lastSignalKey = signalKey;
-      console.log(`✅ Signal sent: ${best.pair} ${best.direction} | Score: ${best.aiScore}% | ${best.confidence}`);
+      console.log(`✅ Signal sent: ${best.pair} ${best.direction} | Score: ${best.aiScore}% | ${best.confidence} | ${best.isLive ? 'LIVE 🟢' : 'OTC 🔴'}`);
     } catch (e) {
       console.log('Send error: ' + e.message);
     }
   }
 
-  // শুরুতে 30 সেকেন্ড অপেক্ষা করে তারপর শুরু
   setTimeout(() => {
     run();
     setInterval(run, CHECK_INTERVAL);
