@@ -1,661 +1,605 @@
-// channel.js - Qx AI Predictor VIP (Highly Optimized Production Version)
+// channel.js - Fixed API + Sleep System
 const https = require('https');
-const fs = require('fs');
 
-// ─── CONFIGURATION & ENVIRONMENT VARIABLES ───
 const CHANNEL_ID = '-1002427080688';
 const ADMIN_ID = 5724602667;
 const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY || 'd29823ad0b3b436992411d122a8b64b6';
-const ALPHAVANTAGE_KEY = process.env.ALPHAVANTAGE_KEY || '74LRZJ0QI9C6L00B'; // Loaded securely from your Railway Config
+const ALPHAVANTAGE_KEY = process.env.ALPHAVANTAGE_KEY || '74LRZJ0QI9C6LO0B';
 
-const CHECK_INTERVAL = 60 * 1000;
-const MIN_GAP = 5 * 60 * 1000;
-const MAX_GAP = 20 * 60 * 1000;
-const CONFIRM_LIMIT = 5;
-const STALE_MINUTES = 10;
+// ✅ Cache system — প্রতি pair এর জন্য আলাদা
+const candleCache = new Map();
+const CACHE_MAX_AGE = 30 * 60 * 1000; // 30 মিনিট
 
-// ─── INTERNAL HIGH-PERFORMANCE CACHE ───
-const apiCache = new Map();
-
-function updateCache(symbol, candles, source) {
-  apiCache.set(symbol, {
-    candles,
-    lastUpdate: Date.now(),
-    source
-  });
-}
-
-function getCachedData(symbol) {
-  const cached = apiCache.get(symbol);
-  if (!cached) return null;
-  const ageInMinutes = (Date.now() - cached.lastUpdate) / 60000;
-  return ageInMinutes <= STALE_MINUTES ? cached : null;
-}
-
-// ─── SYSTEM STATE CONTROL ───
-let isSleeping = false;
-let sleepTimeoutId = null;
-let lastSentTime = 0;
-let lastSignalKey = '';
-let lastMarketStatus = null; 
-let liveCount = 0;
-let noLiveCount = 0;
-const pairCooldown = {};
-const PAIR_COOLDOWN = 10 * 60 * 1000;
-
-// ─── LOG SYSTEM ───
-function log(msg) {
-  const time = getBDTime();
-  const line = `[${time.h}:${time.m}] ${msg}`;
-  console.log(line);
-  try {
-    fs.appendFileSync('signal.log', line + '\n');
-  } catch (e) {}
-}
-
-// ─── WIN/LOSS DAILY TRACKING ───
-const statsFile = 'stats.json';
-let stats = { wins: 0, losses: 0, total: 0, date: '' };
-try {
-  if (fs.existsSync(statsFile)) stats = JSON.parse(fs.readFileSync(statsFile, 'utf8'));
-} catch (e) {}
-
-function saveStats() {
-  try { fs.writeFileSync(statsFile, JSON.stringify(stats)); } catch (e) {}
-}
-
-function resetDailyStats() {
-  const today = new Date().toISOString().slice(0, 10);
-  if (stats.date !== today) {
-    stats = { wins: 0, losses: 0, total: 0, date: today };
-    saveStats();
-  }
-}
-
-// ─── PAIR MATRIX MAP ───
-const pairMap = [
-  { live: 'EUR/USD', otc: 'EUR/USD OTC', flag: '🇪🇺🇺🇸' },
-  { live: 'GBP/USD', otc: 'GBP/USD OTC', flag: '🇬🇧🇺🇸' },
-  { live: 'USD/JPY', otc: 'USD/JPY OTC', flag: '🇺🇸🇯🇵' },
-  { live: 'AUD/USD', otc: 'AUD/USD OTC', flag: '🇦🇺🇺🇸' },
-  { live: 'USD/CAD', otc: 'USD/CAD OTC', flag: '🇺🇸🇨🇦' },
-  { live: 'USD/CHF', otc: 'USD/CHF OTC', flag: '🇺🇸🇨🇭' },
-  { live: 'EUR/JPY', otc: 'EUR/JPY OTC', flag: '🇪🇺🇯🇵' },
-  { live: 'GBP/JPY', otc: 'GBP/JPY OTC', flag: '🇬🇧🇯🇵' }
+// Live pairs
+const livePairs = [
+  'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD',
+  'USD/CAD', 'USD/CHF', 'EUR/JPY', 'GBP/JPY'
 ];
 
-// ─── PRECISION TIME CALCULATIONS ───
+// OTC pairs
+const otcPairs = [
+  'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC', 'AUD/USD OTC',
+  'EUR/GBP OTC', 'USD/CAD OTC', 'EUR/JPY OTC', 'GBP/JPY OTC'
+];
+
+// Live → OTC map
+const liveToOtcMap = {
+  'EUR/USD': 'EUR/USD OTC',
+  'GBP/USD': 'GBP/USD OTC',
+  'USD/JPY': 'USD/JPY OTC',
+  'AUD/USD': 'AUD/USD OTC',
+  'USD/CAD': 'USD/CAD OTC',
+  'USD/CHF': 'USD/CHF OTC',
+  'EUR/JPY': 'EUR/JPY OTC',
+  'GBP/JPY': 'GBP/JPY OTC'
+};
+
+// Sleep flag
+let isSleeping = false;
+let sleepUntil = 0;
+
+// Market open check (BD Time)
+function isForexMarketOpen() {
+  const now = new Date();
+  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+  const day = bd.getUTCDay();
+  const hour = bd.getUTCHours();
+  if (day === 0) return false;
+  if (day === 6 && hour >= 5) return false;
+  return true;
+}
+
 function getBDTime() {
-  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
-  return {
-    h: String(bd.getUTCHours()).padStart(2, '0'),
-    m: String(bd.getUTCMinutes()).padStart(2, '0'),
-    day: bd.getUTCDay(),
-    hour: bd.getUTCHours(),
-    minute: bd.getUTCMinutes()
-  };
+  const now = new Date();
+  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
+  const h = String(bd.getUTCHours()).padStart(2, '0');
+  const m = String(bd.getUTCMinutes()).padStart(2, '0');
+  return { h, m };
 }
 
 function getEntryExpiry() {
-  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+  const now = new Date();
+  const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
   const h = bd.getUTCHours();
   const m = bd.getUTCMinutes();
-  const eM = m + 1, xM = m + 2;
+  const entryM = m + 1;
+  const expiryM = m + 2;
   return {
-    entry: `${String((h + Math.floor(eM / 60)) % 24).padStart(2, '0')}:${String(eM % 60).padStart(2, '0')}`,
-    expiry: `${String((h + Math.floor(xM / 60)) % 24).padStart(2, '0')}:${String(xM % 60).padStart(2, '0')}`
+    entry: String(h + Math.floor(entryM / 60)).padStart(2, '0') + ':' + String(entryM % 60).padStart(2, '0'),
+    expiry: String(h + Math.floor(expiryM / 60)).padStart(2, '0') + ':' + String(expiryM % 60).padStart(2, '0')
   };
 }
 
-// ─── MARKET RULES VALIDATION ───
-function isLiveMarketTime() {
-  const { day, hour } = getBDTime();
-  if (day === 0 || day === 6) return false; // Weekend always OTC
-  if (day === 1 && hour < 11) return false;  // Monday before 11 AM OTC
-  if (day === 5 && hour >= 23) return false; // Friday after 11 PM OTC
-  return hour >= 11 && hour < 23;            // Weekdays 11 AM to 11 PM LIVE
-}
-
-function isWeekendOTC() {
-  const { day, hour } = getBDTime();
-  if (day === 0 || day === 6) return true;
-  if (day === 1 && hour < 11) return true;
-  if (day === 5 && hour >= 23) return true;
-  return false;
-}
-
-function isRolloverTime() {
-  const { hour, minute } = getBDTime();
-  return (hour === 23 && minute >= 58) || (hour === 0 && minute <= 2);
-}
-
-// ─── AUTOMATED ADMIN ALERTS SYSTEM ───
-let sentLiveOpenToday = '', sentLiveCloseToday = '', sentWeekendStartToday = '', sentWeekendEndToday = '';
-
-async function checkScheduledAlerts(bot) {
-  const { day, hour, minute, h, m } = getBDTime();
-  const today = new Date().toISOString().slice(0, 10);
-
-  if (hour === 11 && minute === 0 && day >= 1 && day <= 5 && sentLiveOpenToday !== today) {
-    sentLiveOpenToday = today;
-    try {
-      await bot.sendMessage(ADMIN_ID, `🟢 *Quotex Live Market OPEN*\n\n📊 সকাল ১১:০০ — Live Market চালু হয়েছে\n⏰ BD Time: \`${h}:${m}\`\n\n✅ Live Signal শুরু হচ্ছে।`, { parse_mode: 'Markdown' });
-    } catch (e) {}
-  }
-  if (hour === 23 && minute === 0 && day >= 1 && day <= 4 && sentLiveCloseToday !== today) {
-    sentLiveCloseToday = today;
-    try {
-      await bot.sendMessage(ADMIN_ID, `🔴 *Quotex Live Market CLOSED*\n\n😴 রাত ১১:০০ — Live Market বন্ধ হয়েছে\n⏰ BD Time: \`${h}:${m}\`\n\n📊 OTC Signal চলতে থাকবে।`, { parse_mode: 'Markdown' });
-    } catch (e) {}
-  }
-  if (hour === 23 && minute === 0 && day === 5 && sentWeekendStartToday !== today) {
-    sentWeekendStartToday = today;
-    try {
-      await bot.sendMessage(ADMIN_ID, `🔴 *Weekend শুরু — Live Market CLOSED*\n\n📅 শুক্রবার রাত ১১:০০\n⏰ BD Time: \`${h}:${m}\`\n\n📊 সোমবার সকাল ১১:০০ পর্যন্ত OTC Signal চলবে।`, { parse_mode: 'Markdown' });
-    } catch (e) {}
-  }
-  if (hour === 11 && minute === 0 && day === 1 && sentWeekendEndToday !== today) {
-    sentWeekendEndToday = today;
-    try {
-      await bot.sendMessage(ADMIN_ID, `🟢 *Weekend শেষ — Live Market OPEN*\n\n📅 সোমবার সকাল ১১:০০\n⏰ BD Time: \`${h}:${m}\`\n\n✅ Live Signal শুরু হচ্ছে।`, { parse_mode: 'Markdown' });
-    } catch (e) {}
-  }
-}
-
-// ─── HTTPS ASYNC NETWORK HANDLER ───
-function fetchJSON(url) {
+// ✅ TwelveData API
+async function fetchFromTwelveData(symbol) {
   return new Promise((resolve, reject) => {
-    https.get(url, { timeout: 8000 }, (res) => {
-      if (res.statusCode !== 200) {
-        res.resume();
-        return reject(new Error(`HTTP Status ${res.statusCode}`));
-      }
+    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=50&apikey=${TWELVE_DATA_KEY}`;
+    https.get(url, (res) => {
+      if (res.statusCode === 429) { reject(new Error('HTTP Status 429')); return; }
       let data = '';
-      res.on('data', c => data += c);
+      res.on('data', chunk => data += chunk);
       res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
+        try {
+          const json = JSON.parse(data);
+          if (!json.values || json.values.length === 0) { reject(new Error('No data')); return; }
+          const candles = json.values.map(v => ({
+            open: parseFloat(v.open),
+            high: parseFloat(v.high),
+            low: parseFloat(v.low),
+            close: parseFloat(v.close),
+            volume: parseFloat(v.volume) || 0
+          })).reverse();
+          resolve(candles);
+        } catch (e) { reject(e); }
       });
     }).on('error', reject);
   });
 }
 
-// ─── PRODUCTION FAILOVER API ENGINE (BUGS FIXED) ───
-async function getCandlesWithFailover(symbol) {
-  // Layer 1: TwelveData
-  try {
-    const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
-    const data = await fetchJSON(url);
-    if (data && data.values && data.values.length) {
-      const lastCandleTime = new Date(data.values[0].datetime + ' UTC');
-      if ((Date.now() - lastCandleTime) / 60000 <= STALE_MINUTES) {
-        const candles = data.values.map(v => ({
-          open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0
-        })).reverse();
-        updateCache(symbol, candles, 'TwelveData');
-        return { candles, source: 'TwelveData' };
-      }
-      log(`${symbol} | TwelveData returned stale data. Dropping.`);
-    }
-  } catch (e) {
-    log(`${symbol} | Layer 1 (TwelveData) Fail: ${e.message}`);
-  }
-
-  // Layer 2: AlphaVantage (Secure Non-Demo Execution & Stale Validated)
-  if (ALPHAVANTAGE_KEY) {
-    try {
-      const [fromSym, toSym] = symbol.split('/');
-      const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${fromSym}&to_symbol=${toSym}&interval=1min&outputsize=compact&apikey=${ALPHAVANTAGE_KEY}`;
-      const data = await fetchJSON(url);
-      const series = data['Time Series FX (1min)'];
-      if (series) {
-        const keys = Object.keys(series).sort().reverse().slice(0, 30);
-        if (keys.length) {
-          const lastCandleTime = new Date(keys[0] + ' UTC'); // AlphaVantage default timestamp structure parsing
-          if ((Date.now() - lastCandleTime) / 60000 <= STALE_MINUTES) {
-            const candles = keys.map(k => ({
-              open: +series[k]['1. open'], high: +series[k]['2. high'], low: +series[k]['3. low'], close: +series[k]['4. close'], volume: 0
-            })).reverse();
-            updateCache(symbol, candles, 'AlphaVantage');
-            return { candles, source: 'AlphaVantage' };
-          }
-          log(`${symbol} | AlphaVantage data stale. Dropping.`);
-        }
-      }
-    } catch (e) {
-      log(`${symbol} | Layer 2 (AlphaVantage) Fail: ${e.message}`);
-    }
-  }
-
-  // Layer 3: Architectural Cache Lookup Engine (Max 10 Mins Safe Fallback)
-  const cachedObj = getCachedData(symbol);
-  if (cachedObj) {
-    return { candles: cachedObj.candles, source: `Cache_${cachedObj.source}` };
-  }
-
-  throw new Error(`Data pipeline exhausted. Core API and internal Cache failed for ${symbol}`);
+// ✅ AlphaVantage API
+async function fetchFromAlphaVantage(symbol) {
+  return new Promise((resolve, reject) => {
+    const avSymbol = symbol.replace('/', '');
+    const url = `https://www.alphavantage.co/query?function=FX_INTRADAY&from_symbol=${symbol.split('/')[0]}&to_symbol=${symbol.split('/')[1]}&interval=1min&outputsize=compact&apikey=${ALPHAVANTAGE_KEY}`;
+    https.get(url, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          const timeSeries = json['Time Series FX (1min)'];
+          if (!timeSeries) { reject(new Error('No AV data')); return; }
+          const candles = Object.entries(timeSeries)
+            .slice(0, 50)
+            .map(([time, v]) => ({
+              open: parseFloat(v['1. open']),
+              high: parseFloat(v['2. high']),
+              low: parseFloat(v['3. low']),
+              close: parseFloat(v['4. close']),
+              volume: 0
+            }))
+            .reverse();
+          resolve(candles);
+        } catch (e) { reject(e); }
+      });
+    }).on('error', reject);
+  });
 }
 
+// ✅ Smart candle fetcher — TwelveData → AlphaVantage → Cache
+async function getCandles(symbol) {
+  // Layer 1: TwelveData
+  try {
+    const candles = await fetchFromTwelveData(symbol);
+    // Cache update
+    candleCache.set(symbol, { candles, time: Date.now() });
+    console.log(`[✅ TwelveData] ${symbol} — ${candles.length} candles`);
+    return candles;
+  } catch (e) {
+    console.log(`[❌ TwelveData] ${symbol} — ${e.message} → Trying AlphaVantage...`);
+  }
+
+  // Layer 2: AlphaVantage
+  try {
+    const candles = await fetchFromAlphaVantage(symbol);
+    candleCache.set(symbol, { candles, time: Date.now() });
+    console.log(`[✅ AlphaVantage] ${symbol} — ${candles.length} candles`);
+    return candles;
+  } catch (e) {
+    console.log(`[❌ AlphaVantage] ${symbol} — ${e.message} → Trying Cache...`);
+  }
+
+  // Layer 3: Cache
+  const cached = candleCache.get(symbol);
+  if (cached && (Date.now() - cached.time) < CACHE_MAX_AGE) {
+    console.log(`[📦 Cache] ${symbol} — using cached data`);
+    return cached.candles;
+  }
+
+  throw new Error(`All layers failed for ${symbol}`);
+}
+
+// ✅ Higher timeframe builder
 function buildHigherTF(candles1m, period) {
   const result = [];
   for (let i = 0; i + period <= candles1m.length; i += period) {
-    const sl = candles1m.slice(i, i + period);
+    const slice = candles1m.slice(i, i + period);
     result.push({
-      open: sl[0].open,
-      high: Math.max(...sl.map(c => c.high)),
-      low: Math.min(...sl.map(c => c.low)),
-      close: sl[sl.length - 1].close,
-      volume: sl.reduce((a, b) => a + b.volume, 0)
+      open: slice[0].open,
+      high: Math.max(...slice.map(c => c.high)),
+      low: Math.min(...slice.map(c => c.low)),
+      close: slice[slice.length - 1].close,
+      volume: slice.reduce((a, b) => a + b.volume, 0)
     });
   }
   return result;
 }
 
-// ─── MATHEMATICAL INDICATORS ENGINE ───
+// ✅ Indicators
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
-  let gain = 0, loss = 0;
+  let gains = 0, losses = 0;
   for (let i = candles.length - period; i < candles.length; i++) {
-    const d = candles[i].close - candles[i - 1].close;
-    d > 0 ? gain += d : loss += Math.abs(d);
+    const diff = candles[i].close - candles[i - 1].close;
+    if (diff > 0) gains += diff;
+    else losses += Math.abs(diff);
   }
-  return 100 - (100 / (1 + gain / (loss || 1)));
+  const avgGain = gains / period;
+  const avgLoss = losses / period;
+  if (avgLoss === 0) return 100;
+  return 100 - (100 / (1 + avgGain / avgLoss));
 }
 
 function calcEMA(candles, period) {
-  if (candles.length < 2) return candles[0].close;
+  if (candles.length < period) return candles[candles.length - 1].close;
   const k = 2 / (period + 1);
   let ema = candles[0].close;
-  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
+  for (let i = 1; i < candles.length; i++) {
+    ema = candles[i].close * k + ema * (1 - k);
+  }
   return ema;
 }
 
-function calcMACD(candles) { return calcEMA(candles, 12) - calcEMA(candles, 26); }
-
-function calcStochRSI(candles, period = 14) {
-  const rsiArr = [];
-  for (let i = period; i < candles.length; i++)
-    rsiArr.push(calcRSI(candles.slice(0, i + 1), period));
-  if (rsiArr.length < period) return 50;
-  const rec = rsiArr.slice(-period);
-  const mn = Math.min(...rec), mx = Math.max(...rec);
-  return mx === mn ? 50 : ((rsiArr[rsiArr.length - 1] - mn) / (mx - mn)) * 100;
+function calcMACD(candles) {
+  return calcEMA(candles, 12) - calcEMA(candles, 26);
 }
 
-function calcBB(candles, period = 20) {
-  const p = Math.min(period, candles.length);
-  const closes = candles.slice(-p).map(c => c.close);
-  const sma = closes.reduce((a, b) => a + b, 0) / p;
-  const std = Math.sqrt(closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / p);
-  return { upper: sma + 2 * std, lower: sma - 2 * std, middle: sma };
+function calcStochRSI(candles, period = 14) {
+  const rsiValues = [];
+  for (let i = period; i < candles.length; i++) {
+    rsiValues.push(calcRSI(candles.slice(0, i + 1), period));
+  }
+  if (rsiValues.length < period) return 50;
+  const recent = rsiValues.slice(-period);
+  const minRSI = Math.min(...recent);
+  const maxRSI = Math.max(...recent);
+  if (maxRSI === minRSI) return 50;
+  return ((rsiValues[rsiValues.length - 1] - minRSI) / (maxRSI - minRSI)) * 100;
+}
+
+function calcBollingerBands(candles, period = 20) {
+  if (candles.length < period) period = candles.length;
+  const closes = candles.slice(-period).map(c => c.close);
+  const sma = closes.reduce((a, b) => a + b, 0) / period;
+  const variance = closes.reduce((sum, c) => sum + Math.pow(c - sma, 2), 0) / period;
+  const stdDev = Math.sqrt(variance);
+  return { upper: sma + 2 * stdDev, middle: sma, lower: sma - 2 * stdDev };
 }
 
 function calcATR(candles, period = 14) {
   const trs = [];
   for (let i = 1; i < candles.length; i++) {
-    trs.push(Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i - 1].close),
-      Math.abs(candles[i].low - candles[i - 1].close)
-    ));
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevClose = candles[i - 1].close;
+    trs.push(Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose)));
   }
-  return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
-}
-
-function calcSR(candles) {
-  const highs = candles.slice(-20).map(c => c.high);
-  const lows = candles.slice(-20).map(c => c.low);
-  const cur = candles[candles.length - 1].close;
-  return {
-    distRes: ((Math.max(...highs) - cur) / cur) * 100,
-    distSup: ((cur - Math.min(...lows)) / cur) * 100
-  };
+  return trs.slice(-period).reduce((a, b) => a + b, 0) / Math.max(trs.slice(-period).length, 1);
 }
 
 function calcADX(candles, period = 14) {
-  if (candles.length < period + 1) return { adx: 25, plusDI: 25, minusDI: 25 };
-  const trs = [], plusDMs = [], minusDMs = [];
-  for (let i = 1; i < candles.length; i++) {
-    const high = candles[i].high, low = candles[i].low;
-    const pHigh = candles[i - 1].high, pLow = candles[i - 1].low, pClose = candles[i - 1].close;
-    trs.push(Math.max(high - low, Math.abs(high - pClose), Math.abs(low - pClose)));
-    const upMove = high - pHigh;
-    const downMove = pLow - low;
-    plusDMs.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDMs.push(downMove > upMove && downMove > 0 ? downMove : 0);
+  if (candles.length < period + 1) return 20;
+  let plusDM = 0, minusDM = 0, tr = 0;
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const high = candles[i].high;
+    const low = candles[i].low;
+    const prevHigh = candles[i - 1].high;
+    const prevLow = candles[i - 1].low;
+    const prevClose = candles[i - 1].close;
+    const upMove = high - prevHigh;
+    const downMove = prevLow - low;
+    if (upMove > downMove && upMove > 0) plusDM += upMove;
+    if (downMove > upMove && downMove > 0) minusDM += downMove;
+    tr += Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
   }
-  const avgTR = trs.slice(-period).reduce((a, b) => a + b, 0) / period;
-  const avgPlus = plusDMs.slice(-period).reduce((a, b) => a + b, 0) / period;
-  const avgMinus = minusDMs.slice(-period).reduce((a, b) => a + b, 0) / period;
-  if (avgTR === 0) return { adx: 0, plusDI: 0, minusDI: 0 };
-  const plusDI = (avgPlus / avgTR) * 100;
-  const minusDI = (avgMinus / avgTR) * 100;
-  const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI || 1) * 100;
-  return { adx: dx, plusDI, minusDI };
+  if (tr === 0) return 20;
+  const plusDI = (plusDM / tr) * 100;
+  const minusDI = (minusDM / tr) * 100;
+  const dx = Math.abs(plusDI - minusDI) / (plusDI + minusDI + 0.001) * 100;
+  return dx;
 }
 
-function calcSuperTrend(candles, period = 10, multiplier = 3) {
-  if (candles.length < period + 1) return { dir: 'NEUTRAL', value: 0 };
-  const atr = calcATR(candles, period);
-  const last = candles[candles.length - 1];
-  const hl2 = (last.high + last.low) / 2;
-  return { dir: last.close > hl2 ? 'UP' : 'DOWN', upperBand: hl2 + multiplier * atr, lowerBand: hl2 - multiplier * atr };
-}
-
-function calcVWAP(candles) {
-  let cumVol = 0, cumTP = 0;
-  for (const c of candles) {
-    const tp = (c.high + c.low + c.close) / 3;
-    cumTP += tp * c.volume;
-    cumVol += c.volume;
-  }
-  return cumVol === 0 ? candles[candles.length - 1].close : cumTP / cumVol;
-}
-
-function detectFakeBreakout(candles) {
-  const last = candles[candles.length - 1];
-  const prev = candles[candles.length - 2];
-  const bb = calcBB(candles);
-  if (last.high > bb.upper && last.close < bb.upper && prev.close < bb.upper) return { fake: true, type: 'FAKE_UP' };
-  if (last.low < bb.lower && last.close > bb.lower && prev.close > bb.lower) return { fake: true, type: 'FAKE_DOWN' };
-  return { fake: false, type: 'NONE' };
-}
-
-function isSidewaysMarket(candles, period = 20) {
-  const sl = candles.slice(-period);
-  const range = (Math.max(...sl.map(c => c.high)) - Math.min(...sl.map(c => c.low))) / candles[candles.length - 1].close * 100;
-  return range < 0.3;
-}
-
-function isCandleClosed(candles) { return candles.length >= 2; }
-
-function calcCandlePattern(candles) {
-  const len = candles.length;
-  if (len < 3) return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
-  const c = candles[len - 2], p = candles[len - 3], p2 = len >= 4 ? candles[len - 4] : candles[len - 3];
-  const body = Math.abs(c.close - c.open), upWick = c.high - Math.max(c.close, c.open), dnWick = Math.min(c.close, c.open) - c.low, range = c.high - c.low;
-  const bull = c.close > c.open, bear = c.close < c.open;
-
-  if (bull && p.close < p.open && c.close > p.open && c.open < p.close) return { pattern: 'Bullish Engulfing', dir: 'UP', str: 3 };
-  if (bear && p.close > p.open && c.open > p.close && c.close < p.open) return { pattern: 'Bearish Engulfing', dir: 'DOWN', str: 3 };
-  if (dnWick > body * 2.5 && upWick < body * 0.5) return { pattern: 'Bullish Pin Bar', dir: 'UP', str: 3 };
-  if (upWick > body * 2.5 && dnWick < body * 0.5) return { pattern: 'Bearish Pin Bar', dir: 'DOWN', str: 3 };
-  if (p2.close < p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && bull && c.close > (p2.open + p2.close) / 2) return { pattern: 'Morning Star', dir: 'UP', str: 4 };
-  if (p2.close > p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && bear && c.close < (p2.open + p2.close) / 2) return { pattern: 'Evening Star', dir: 'DOWN', str: 4 };
-  if (bull && p.close > p.open && p2.close > p2.open && body > range * 0.6) return { pattern: 'Three White Soldiers', dir: 'UP', str: 4 };
-  if (bear && p.close < p.open && p2.close < p2.open && body > range * 0.6) return { pattern: 'Three Black Crows', dir: 'DOWN', str: 4 };
-  if (body < range * 0.1) return { pattern: 'Doji', dir: 'NEUTRAL', str: 1 };
-  if (bull && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bullish Marubozu', dir: 'UP', str: 3 };
-  if (bear && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bearish Marubozu', dir: 'DOWN', str: 3 };
-  return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
-}
-
-function calcTrend(candles) {
-  const ema5 = calcEMA(candles, 5), ema10 = calcEMA(candles, 10), ema20 = calcEMA(candles, 20), ema50 = calcEMA(candles, 50);
-  const last = candles[candles.length - 1].close;
-  let up = 0, dn = 0;
-  last > ema5 ? up++ : dn++; last > ema20 ? up++ : dn++;
-  ema5 > ema20 ? up += 2 : dn += 2; ema10 > ema50 ? up += 2 : dn += 2;
-  if (ema5 > ema10 && ema10 > ema20) up += 2; else if (ema5 < ema10 && ema10 < ema20) dn += 2;
-  return { dir: up > dn ? 'UP' : 'DOWN', up, dn };
-}
-
-function calcVolume(candles) {
-  const rec = candles.slice(-5), old = candles.slice(-15, -5);
-  const avgRec = rec.reduce((a, b) => a + b.volume, 0) / rec.length;
-  const avgOld = old.reduce((a, b) => a + b.volume, 0) / Math.max(old.length, 1);
-  if (avgOld === 0) return { dir: 'NEUTRAL', str: 0 };
-  const isBull = candles[candles.length - 1].close > candles[candles.length - 1].open;
-  return (avgRec / avgOld > 1.5) ? { dir: isBull ? 'UP' : 'DOWN', str: 2 } : { dir: 'NEUTRAL', str: 0 };
-}
-
-// ─── TIMEFRAME ALGORITHMIC SCORING ENGINE ───
-function analyzeTimeframe(candles) {
-  const rsi = calcRSI(candles), rsi7 = calcRSI(candles, 7), stoch = calcStochRSI(candles), macd = calcMACD(candles);
-  const bb = calcBB(candles), atr = calcATR(candles), sr = calcSR(candles), cp = calcCandlePattern(candles);
-  const trend = calcTrend(candles), vol = calcVolume(candles), adx = calcADX(candles), superTrend = calcSuperTrend(candles);
-  const vwap = calcVWAP(candles), fakeBreak = detectFakeBreakout(candles), sideways = isSidewaysMarket(candles);
-  const last = candles[candles.length - 1].close;
-
-  let up = 0, dn = 0;
-  const signals = [];
-
-  if (sideways) return { direction: 'NEUTRAL', ratio: 0, up: 0, dn: 0, signals: ['Sideways Market'], volatility: 0, total: 0, isStrongTrend: false, trendDir: 'NEUTRAL', sideways: true };
-
-  if (fakeBreak.fake) {
-    if (fakeBreak.type === 'FAKE_UP') dn += 3; else up += 3;
-    signals.push('Fake Breakout Detected');
-  }
-  if (rsi < 30) { up += 3; signals.push('RSI Oversold'); } else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
-  if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); } else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
-  if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); } else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
-  if (macd > 0) up += 2; else dn += 2;
-  if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); } else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
-
-  up += trend.up; dn += trend.dn;
-  signals.push(trend.dir === 'UP' ? 'EMA Bullish' : 'EMA Bearish');
-
-  if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); } else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
-  if (sr.distSup < 0.1) up += 3; if (sr.distRes < 0.1) dn += 3;
-  if (vol.dir === 'UP') up += vol.str; else if (vol.dir === 'DOWN') dn += vol.str;
-
-  if (adx.adx > 25) {
-    if (adx.plusDI > adx.minusDI) { up += 3; signals.push('ADX Strong Bullish'); } else { dn += 3; signals.push('ADX Strong Bearish'); }
-  }
-  if (superTrend.dir === 'UP') up += 2; else dn += 2;
-  if (last > vwap) up += 2; else dn += 2;
-
-  const total = up + dn;
-  const dominant = Math.max(up, dn);
+function findSupportResistance(candles) {
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const recentHigh = Math.max(...highs.slice(-20));
+  const recentLow = Math.min(...lows.slice(-20));
+  const currentPrice = candles[candles.length - 1].close;
   return {
-    direction: up >= dn ? 'UP' : 'DOWN',
-    ratio: total > 0 ? dominant / total : 0,
-    up, dn, signals,
-    volatility: (atr / last) * 100,
-    total,
-    isStrongTrend: (trend.up >= 5 || trend.dn >= 5) && adx.adx > 15,
-    sideways: false
+    distToResistance: ((recentHigh - currentPrice) / currentPrice) * 100,
+    distToSupport: ((currentPrice - recentLow) / currentPrice) * 100
   };
 }
 
-// ─── PAIR METRIC MONITOR ───
-async function smartAnalyze(pair, isOTCMode = false) {
-  const lastPairTime = pairCooldown[pair.live] || 0;
-  if (Date.now() - lastPairTime < PAIR_COOLDOWN) return null;
+function analyzeCandlePattern(candles) {
+  const len = candles.length;
+  if (len < 3) return { pattern: 'No Clear Pattern', direction: 'NEUTRAL', strength: 0 };
+  const c = candles[len - 1];
+  const p = candles[len - 2];
+  const p2 = candles[len - 3];
+  const body = Math.abs(c.close - c.open);
+  const upperWick = c.high - Math.max(c.close, c.open);
+  const lowerWick = Math.min(c.close, c.open) - c.low;
+  const totalRange = c.high - c.low;
+  const isBullish = c.close > c.open;
+  const isBearish = c.close < c.open;
 
-  let candles1m, source = '', isLive = false;
-  const targetSymbol = pair.live;
+  if (isBullish && p.close < p.open && c.close > p.open && c.open < p.close)
+    return { pattern: 'Bullish Engulfing', direction: 'UP', strength: 3 };
+  if (isBearish && p.close > p.open && c.open > p.close && c.close < p.open)
+    return { pattern: 'Bearish Engulfing', direction: 'DOWN', strength: 3 };
+  if (lowerWick > body * 2.5 && upperWick < body * 0.5 && lowerWick > totalRange * 0.6)
+    return { pattern: 'Bullish Pin Bar', direction: 'UP', strength: 3 };
+  if (upperWick > body * 2.5 && lowerWick < body * 0.5 && upperWick > totalRange * 0.6)
+    return { pattern: 'Bearish Pin Bar', direction: 'DOWN', strength: 3 };
+  if (p2.close < p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && isBullish && c.close > (p2.open + p2.close) / 2)
+    return { pattern: 'Morning Star', direction: 'UP', strength: 4 };
+  if (p2.close > p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && isBearish && c.close < (p2.open + p2.close) / 2)
+    return { pattern: 'Evening Star', direction: 'DOWN', strength: 4 };
+  if (c.close > c.open && p.close > p.open && p2.close > p2.open && c.close > p.close && p.close > p2.close && body > totalRange * 0.6)
+    return { pattern: 'Three White Soldiers', direction: 'UP', strength: 4 };
+  if (c.close < c.open && p.close < p.open && p2.close < p2.open && c.close < p.close && p.close < p2.close && body > totalRange * 0.6)
+    return { pattern: 'Three Black Crows', direction: 'DOWN', strength: 4 };
+  if (body < totalRange * 0.1)
+    return { pattern: 'Doji', direction: 'NEUTRAL', strength: 1 };
+  if (isBullish && upperWick < body * 0.05 && lowerWick < body * 0.05)
+    return { pattern: 'Bullish Marubozu', direction: 'UP', strength: 3 };
+  if (isBearish && upperWick < body * 0.05 && lowerWick < body * 0.05)
+    return { pattern: 'Bearish Marubozu', direction: 'DOWN', strength: 3 };
+  if (c.high > p.high && c.low > p.low && p.high > p2.high && p.low > p2.low)
+    return { pattern: 'Higher High', direction: 'UP', strength: 2 };
+  if (c.high < p.high && c.low < p.low && p.high < p2.high && p.low < p2.low)
+    return { pattern: 'Lower Low', direction: 'DOWN', strength: 2 };
+  return { pattern: 'No Clear Pattern', direction: 'NEUTRAL', strength: 0 };
+}
 
-  try {
-    const result = await getCandlesWithFailover(targetSymbol);
-    candles1m = result.candles;
-    source = result.source;
-    isLive = !isOTCMode && !source.startsWith('Cache_');
-  } catch (e) {
-    log(`${targetSymbol} | Pipeline Exhausted: ${e.message}`);
-    return null;
+function analyzeTrend(candles) {
+  const ema5 = calcEMA(candles, 5);
+  const ema10 = calcEMA(candles, 10);
+  const ema20 = calcEMA(candles, 20);
+  const ema50 = calcEMA(candles, 50);
+  const lastClose = candles[candles.length - 1].close;
+  let upScore = 0, downScore = 0;
+  if (ema5 > ema20) upScore += 2; else downScore += 2;
+  if (ema10 > ema50) upScore += 2; else downScore += 2;
+  if (lastClose > ema5) upScore += 1; else downScore += 1;
+  if (lastClose > ema20) upScore += 1; else downScore += 1;
+  if (ema5 > ema10 && ema10 > ema20) upScore += 2;
+  else if (ema5 < ema10 && ema10 < ema20) downScore += 2;
+  return { trendDir: upScore > downScore ? 'UP' : 'DOWN', upScore, downScore };
+}
+
+function analyzeVolume(candles) {
+  const recent = candles.slice(-5);
+  const older = candles.slice(-15, -5);
+  const avgRecentVol = recent.reduce((a, b) => a + b.volume, 0) / recent.length;
+  const avgOlderVol = older.reduce((a, b) => a + b.volume, 0) / Math.max(older.length, 1);
+  const isBullish = candles[candles.length - 1].close > candles[candles.length - 1].open;
+  if (avgOlderVol === 0) return { volumeSignal: 'NEUTRAL', strength: 0 };
+  const volRatio = avgRecentVol / avgOlderVol;
+  if (volRatio > 1.5 && isBullish) return { volumeSignal: 'UP', strength: 2 };
+  if (volRatio > 1.5 && !isBullish) return { volumeSignal: 'DOWN', strength: 2 };
+  return { volumeSignal: 'NEUTRAL', strength: 0 };
+}
+
+function analyzeTimeframe(candles) {
+  const rsi = calcRSI(candles);
+  const rsi7 = calcRSI(candles, 7);
+  const stochRSI = calcStochRSI(candles);
+  const macd = calcMACD(candles);
+  const bb = calcBollingerBands(candles);
+  const atr = calcATR(candles);
+  const adx = calcADX(candles);
+  const sr = findSupportResistance(candles);
+  const candlePattern = analyzeCandlePattern(candles);
+  const trend = analyzeTrend(candles);
+  const volume = analyzeVolume(candles);
+  const lastClose = candles[candles.length - 1].close;
+
+  let upScore = 0, downScore = 0;
+  const signals = [];
+
+  // RSI
+  if (rsi < 30) { upScore += 3; signals.push('RSI Oversold'); }
+  else if (rsi > 70) { downScore += 3; signals.push('RSI Overbought'); }
+  else if (rsi < 45) upScore += 1;
+  else if (rsi > 55) downScore += 1;
+
+  // Fast RSI
+  if (rsi7 < 25) { upScore += 2; signals.push('Fast RSI Oversold'); }
+  else if (rsi7 > 75) { downScore += 2; signals.push('Fast RSI Overbought'); }
+
+  // StochRSI
+  if (stochRSI < 20) { upScore += 2; signals.push('StochRSI Oversold'); }
+  else if (stochRSI > 80) { downScore += 2; signals.push('StochRSI Overbought'); }
+
+  // MACD
+  if (macd > 0) { upScore += 2; signals.push('MACD Bullish'); }
+  else { downScore += 2; signals.push('MACD Bearish'); }
+
+  // Bollinger Bands
+  if (lastClose <= bb.lower) { upScore += 3; signals.push('Price at Lower BB'); }
+  else if (lastClose >= bb.upper) { downScore += 3; signals.push('Price at Upper BB'); }
+
+  // ADX
+  if (adx > 25) {
+    upScore += trend.upScore;
+    downScore += trend.downScore;
+    signals.push('ADX Strong Trend');
+  } else {
+    upScore += Math.floor(trend.upScore / 2);
+    downScore += Math.floor(trend.downScore / 2);
   }
 
-  if (!isCandleClosed(candles1m)) return null;
+  // EMA Trend
+  if (trend.trendDir === 'UP') signals.push('EMA Bullish');
+  else signals.push('EMA Bearish');
+
+  // Candle Pattern
+  if (candlePattern.direction === 'UP') { upScore += candlePattern.strength; signals.push(candlePattern.pattern); }
+  else if (candlePattern.direction === 'DOWN') { downScore += candlePattern.strength; signals.push(candlePattern.pattern); }
+
+  // Support/Resistance
+  if (sr.distToSupport < 0.1) { upScore += 3; signals.push('At Support'); }
+  if (sr.distToResistance < 0.1) { downScore += 3; signals.push('At Resistance'); }
+
+  // Volume
+  if (volume.volumeSignal === 'UP') { upScore += volume.strength; signals.push('Volume UP'); }
+  else if (volume.volumeSignal === 'DOWN') { downScore += volume.strength; signals.push('Volume DOWN'); }
+
+  const volatility = (atr / lastClose) * 100;
+  const totalScore = upScore + downScore;
+  const dominantScore = Math.max(upScore, downScore);
+  const ratio = totalScore > 0 ? dominantScore / totalScore : 0;
+  const direction = upScore >= downScore ? 'UP' : 'DOWN';
+
+  return { direction, ratio, upScore, downScore, signals, volatility, totalScore };
+}
+
+// ✅ Main analyze function
+async function analyzeWithCache(symbol, isOTC = false) {
+  let candles1m;
+
+  if (isOTC) {
+    // OTC mode — শুধু cache ব্যবহার করবে
+    const cached = candleCache.get(symbol);
+    if (!cached) {
+      console.log(`[OTC] ${symbol} — No cache available, skipping`);
+      return null;
+    }
+    candles1m = cached.candles;
+    console.log(`[OTC 📦] ${symbol} — Using cached data`);
+  } else {
+    // Live mode — API call করবে
+    try {
+      candles1m = await getCandles(symbol);
+    } catch (e) {
+      console.log(`[LIVE ❌] ${symbol} — ${e.message}`);
+      return null;
+    }
+  }
+
   const candles5m = buildHigherTF(candles1m, 5);
-  if (candles5m.length < 3) return null;
 
   const tf1m = analyzeTimeframe(candles1m);
   const tf5m = analyzeTimeframe(candles5m);
 
-  if (tf1m.sideways || tf5m.sideways || !tf1m.isStrongTrend || tf1m.direction !== tf5m.direction || tf1m.volatility < 0.01) return null;
+  console.log(`${symbol} | 1m: ${tf1m.direction}(${Math.round(tf1m.ratio*100)}%) | 5m: ${tf5m.direction}(${Math.round(tf5m.ratio*100)}%)`);
+
+  // 1m + 5m confirmation
+  if (tf1m.direction !== tf5m.direction) {
+    console.log(`${symbol} | Mixed timeframes — skipping`);
+    return null;
+  }
+
+  if (tf1m.volatility < 0.005) {
+    console.log(`${symbol} | Too low volatility — skipping`);
+    return null;
+  }
 
   const avgRatio = (tf1m.ratio + tf5m.ratio) / 2;
-  const aiScore = Math.round(avgRatio * 100);
-  if (aiScore < 75) return null;
+  if (avgRatio < 0.68) {
+    console.log(`${symbol} | Low confidence (${Math.round(avgRatio*100)}%) — skipping`);
+    return null;
+  }
+
+  let confidence, winRate;
+  if (avgRatio >= 0.82) { confidence = 'Very High 🔥'; winRate = '85%'; }
+  else if (avgRatio >= 0.75) { confidence = 'High 🟢'; winRate = '80%'; }
+  else { confidence = 'Medium 🟡'; winRate = '75%'; }
+
+  const trendDesc = tf5m.direction === 'UP' ? 'Strong Uptrend' : 'Strong Downtrend';
+  const topSignals = tf1m.signals.slice(0, 3).join(' • ');
 
   return {
-    pair: isLive ? pair.live : pair.otc,
-    flag: pair.flag,
+    pair: isOTC ? liveToOtcMap[symbol] || (symbol + ' OTC') : symbol,
     direction: tf1m.direction,
-    confidence: aiScore >= 82 ? 'Very High 🔥' : 'High 🟢',
-    aiScore,
-    avgRatio,
-    trend: tf1m.direction === 'UP' ? 'Strong Uptrend 📈' : 'Strong Downtrend 📉',
-    signals: tf1m.signals.filter(s => !['EMA Bullish', 'EMA Bearish'].includes(s)).slice(0, 3),
-    total: tf1m.total,
-    isLive,
-    livePair: pair.live
+    confidence,
+    winRate,
+    trend: trendDesc,
+    signals: topSignals,
+    avgRatio: Math.round(avgRatio * 100),
+    tf1m: Math.round(tf1m.ratio * 100),
+    tf5m: Math.round(tf5m.ratio * 100),
+    totalScore: tf1m.totalScore,
+    isLive: !isOTC
   };
 }
 
-// ─── TELEGRAM METRIC BROADCAST TEMPLATE ───
-function buildSignalMessage(best, entry, expiry) {
-  return (
-    `╔══════════════════════╗\n` +
-    `     🚀 𝗤𝘅 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝗜𝗣\n` +
-    `╚══════════════════════╝\n\n` +
-    `💹 𝗔𝗦𝗦𝗘𝗧        ➜ ${best.pair} ${best.flag}\n` +
-    `📈 𝗗𝗜𝗥𝗘𝗖𝗧𝗜𝗢𝗡    ➜ ${best.direction === 'UP' ? '🟢 BUY ⏫' : '🔴 SELL ⏬'}\n` +
-    `🕒 𝗘𝗡𝗧𝗥𝗬        ➜ ${entry} (BD Time)\n` +
-    `⏳ 𝗘𝗫𝗣𝗜𝗥𝗬      ➜ ${expiry} (1 Minute)\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎯 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘     ➜ ${best.aiScore}%\n` +
-    `🔥 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘  ➜ ${best.confidence}\n` +
-    `📊 𝗧𝗥𝗘𝗡𝗗        ➜ ${best.trend}\n` +
-    `🌐 𝗠𝗔𝗥𝗞𝗘𝗧      ➜ ${best.isLive ? '🟢 LIVE' : '🔴 OTC'}\n` +
-    `⚡ 𝗦𝗧𝗔𝗧𝗨𝗦      ➜ ✅ Confirmed Signal\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `📌 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n` +
-    `${best.signals.map(s => `• ${s}`).join('\n')}\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
-    `• Maximum 1 Step MTG\n` +
-    `• Never Overtrade\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
-    `⚠️ This signal is AI-generated.\n` +
-    `Always trade at your own risk.`
-  );
-}
-
-// ─── MAIN SYSTEM MODULE EXPORT ───
 module.exports = function(bot, newsModule) {
-  log('✅ Qx AI Predictor VIP Professional Engine Started Stack Successfully!');
+  console.log('✅ Channel auto signal started!');
 
-  bot.onText(/\/status/, async (msg) => {
-    if (msg.from.id !== ADMIN_ID) return;
-    const { h, m } = getBDTime();
-    await bot.sendMessage(ADMIN_ID,
-      `📊 *BOT STATUS REPORT*\n\n` +
-      `⏰ BD Time: \`${h}:${m}\`\n` +
-      `🌐 Market Mode: ${isLiveMarketTime() ? '🟢 LIVE' : '🔴 OTC'}\n` +
-      `⏸ Rollover Block: ${isRolloverTime() ? '⏸ YES' : '✅ NO'}\n` +
-      `📅 Weekend OTC: ${isWeekendOTC() ? '✅ YES' : '❌ NO'}\n` +
-      `⚡ Core Status: \`${isSleeping ? '💤 DEEP SLEEP ACTIVE' : '🔍 SCANNING ACTIVE'}\`\n` +
-      `📡 Last Signal Key: \`${lastSignalKey || 'None'}\`\n` +
-      `📈 Performance Matrix: W:${stats.wins} L:${stats.losses} T:${stats.total}`,
-      { parse_mode: 'Markdown' }
-    );
-  });
+  let lastMarketStatus = null;
 
-  bot.onText(/\/market/, async (msg) => {
-    if (msg.from.id !== ADMIN_ID) return;
-    const { h, m } = getBDTime();
-    await bot.sendMessage(ADMIN_ID, `🌐 *MARKET REPORT ENVIRONMENT*\n\n${isLiveMarketTime() ? '🟢 Live Market Enabled' : '🔴 OTC Market Engaged'}\n⏰ BD Time: \`${h}:${m}\``, { parse_mode: 'Markdown' });
-  });
-
-  bot.onText(/\/force/, async (msg) => {
-    if (msg.from.id !== ADMIN_ID) return;
-    if (isSleeping) {
-      if (sleepTimeoutId) clearTimeout(sleepTimeoutId);
-      isSleeping = false;
-      log('⚡ Force Command Triggered: Interrupted execution sleep cycle.');
-    }
-    await bot.sendMessage(ADMIN_ID, '⚡ System Interrupted: Initializing Immediate Force Market Scan...');
-    lastSentTime = 0;
-    await run();
-  });
-
-  async function run() {
-    if (isSleeping) return;
-
-    resetDailyStats();
-    await checkScheduledAlerts(bot);
-
-    if ((newsModule && newsModule.isNewsActive()) || isRolloverTime()) {
+  async function checkAndSendBestSignal() {
+    // Sleep check
+    if (Date.now() < sleepUntil) {
+      const remaining = Math.round((sleepUntil - Date.now()) / 1000 / 60);
+      console.log(`[😴 Sleep] ${remaining} মিনিট বাকি — কোনো API call নেই`);
       return;
     }
 
-    const now = Date.now();
-    if (lastSentTime > 0 && (now - lastSentTime) < MIN_GAP) return;
+    // News check
+    if (newsModule && newsModule.isNewsActive()) {
+      console.log('[📰 News] Active — signal skipped');
+      return;
+    }
 
-    const otcMode = !isLiveMarketTime();
-    const results = [];
-    let anyLive = false;
+    const marketOpen = isForexMarketOpen();
+    const { h, m } = getBDTime();
 
-    // Linear Sequential processing to prevent asynchronous connection pool floods & race conditions
-    for (const pair of pairMap) {
-      if (isSleeping) return;
-      try {
-        const res = await smartAnalyze(pair, otcMode);
-        if (res) {
-          results.push(res);
-          if (res.isLive) anyLive = true;
-        }
-        await new Promise(r => setTimeout(r, 1200)); // Rate limiting interval defense
-      } catch (e) {
-        log(`Scan Interruption on ${pair.live}: ${e.message}`);
+    // Market status change notification
+    if (lastMarketStatus !== marketOpen) {
+      lastMarketStatus = marketOpen;
+      if (marketOpen) {
+        try {
+          await bot.sendMessage(ADMIN_ID,
+            '🟢 *Forex Market Open!*\n\n📊 Live Data Signal চালু হয়েছে।\n⏰ BD Time: `' + h + ':' + m + '`',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
+      } else {
+        try {
+          await bot.sendMessage(ADMIN_ID,
+            '🔴 *Forex Market Closed!*\n\n😴 Live data পাওয়া যাচ্ছে না।\n⏰ BD Time: `' + h + ':' + m + '`\n\n📊 OTC signal চলতে থাকবে।',
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {}
       }
     }
 
-    // Dynamic Network State Tracker
-    if (anyLive) { liveCount++; noLiveCount = 0; } else { noLiveCount++; liveCount = 0; }
+    console.log(`[🔍 Scan] BD Time: ${h}:${m} | Market: ${marketOpen ? 'OPEN' : 'CLOSED'}`);
 
-    if (liveCount >= CONFIRM_LIMIT && lastMarketStatus !== 'live') {
-      lastMarketStatus = 'live'; liveCount = 0;
-      try { await bot.sendMessage(ADMIN_ID, `🟢 *Live Data Stream Confirmed*\n\n📊 High-frequency live quotes recovered across pairs.`, { parse_mode: 'Markdown' }); } catch (e) {}
+    const results = [];
+
+    if (marketOpen) {
+      // Live mode — API call করবে
+      for (const symbol of livePairs) {
+        try {
+          const result = await analyzeWithCache(symbol, false);
+          if (result) results.push(result);
+          await new Promise(r => setTimeout(r, 1000)); // API rate limit এর জন্য
+        } catch (e) {
+          console.log(`[❌] ${symbol} — ${e.message}`);
+        }
+      }
+    } else {
+      // OTC mode — শুধু cache ব্যবহার করবে, কোনো API call নেই
+      for (const symbol of livePairs) {
+        try {
+          const result = await analyzeWithCache(symbol, true);
+          if (result) results.push(result);
+        } catch (e) {
+          console.log(`[❌ OTC] ${symbol} — ${e.message}`);
+        }
+      }
     }
-    if (noLiveCount >= CONFIRM_LIMIT && lastMarketStatus !== 'otc') {
-      lastMarketStatus = 'otc'; noLiveCount = 0;
-      try { await bot.sendMessage(ADMIN_ID, `🔴 *Live Data Pipeline Disconnected*\n\n📊 Failover routing triggered. Internal environment running on OTC parameters.`, { parse_mode: 'Markdown' }); } catch (e) {}
+
+    if (results.length === 0) {
+      console.log('[⚠️] No confirmed signal found.');
+      return;
     }
 
-    if (!results.length) return;
-
-    // Advanced Ranking Metrics Multi-Sort Execution
-    results.sort((a, b) => b.avgRatio - a.avgRatio || b.total - a.total);
+    // Best signal বেছে নাও
+    results.sort((a, b) => b.avgRatio - a.avgRatio || b.totalScore - a.totalScore);
     const best = results[0];
-
-    const signalKey = `${best.pair}_${best.direction}`;
-    if (signalKey === lastSignalKey && (now - lastSentTime) < MAX_GAP) return;
-
     const { entry, expiry } = getEntryExpiry();
-    const msg = buildSignalMessage(best, entry, expiry);
+    const dirEmoji = best.direction === 'UP' ? '⏫' : '⏬';
 
-    try {
-      await bot.sendMessage(CHANNEL_ID, msg, { parse_mode: 'Markdown' });
-      
-      lastSentTime = Date.now();
-      lastSignalKey = signalKey;
-      pairCooldown[best.livePair] = Date.now();
-      stats.total++;
-      saveStats();
+    await bot.sendMessage(CHANNEL_ID,
+      '📡 *𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿 𝗩𝗜𝗣 𝗯𝗼𝘁📊*\n' +
+      '━━━━━━━━━━━━━━━━━━\n\n' +
+      '📊 *ASSET* ➜ `' + best.pair + '`\n' +
+      '🚀 *DIRECTION* ➜ ' + best.direction + ' ' + dirEmoji + '\n' +
+      '📊 *ENTRY* ➜ `' + entry + '`\n' +
+      '⏱ *EXPIRY* ➜ `' + expiry + '`\n' +
+      '━━━━━━━━━━━━━━━━━━\n' +
+      '♻️ *WIN RATE* ➜ `' + best.winRate + '`\n' +
+      '✅ *CONFIDENCE* ➜ ' + best.confidence + '\n' +
+      '🔀 *TREND* ➜ `' + best.trend + '`\n' +
+      '🔗 *SIGNALS* ➜ `' + best.signals + '`\n' +
+      '━━━━━━━━━━━━━━━━━━\n' +
+      (best.isLive ?
+        '📊 *Mode:* Live market Signal\n📈 *TF:* 1min: `' + best.tf1m + '%` • 5min: `' + best.tf5m + '%`\n'
+        :
+        '📊 *Mode:* OTC Market Signal\n') +
+      '━━━━━━━━━━━━━━━━━━\n' +
+      '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
+      { parse_mode: 'Markdown' }
+    );
 
-      log(`🏆 Signal Transmitted Successfully: ${best.pair} | Score: ${best.aiScore}%`);
+    // ✅ Signal পরে sleep — কোনো API call হবে না
+    const sleepMinutes = marketOpen
+      ? Math.floor(Math.random() * 6) + 8  // Live: 8-13 মিনিট
+      : Math.floor(Math.random() * 4) + 5;  // OTC: 5-8 মিনিট
 
-      // ─── STRICT ZERO REQUEST DEEP SLEEP ALGORITHM ───
-      const sleepMinutes = Math.floor(Math.random() * (20 - 5 + 1)) + 5;
-      isSleeping = true;
-      log(`💤 Deep Sleep Engaged: System shutting down scanners for ${sleepMinutes} Mins. Network API activity set to ZERO.`);
-
-      sleepTimeoutId = setTimeout(() => {
-        isSleeping = false;
-        log('⏰ Sleep Cycle Terminated. Resuming high-confidence market scanning loops...');
-        run();
-      }, sleepMinutes * 60 * 1000);
-
-    } catch (e) {
-      log(`Broadcast Exception Error: ${e.message}`);
-    }
+    sleepUntil = Date.now() + sleepMinutes * 60 * 1000;
+    console.log(`[✅ Signal Sent] ${best.pair} | ${best.isLive ? 'LIVE' : 'OTC'} | Sleeping ${sleepMinutes} min...`);
   }
 
+  // প্রতি 1 মিনিটে check করবে — কিন্তু sleep এ থাকলে skip করবে
   setTimeout(() => {
-    run();
-    setInterval(run, CHECK_INTERVAL);
-  }, 30000);
+    checkAndSendBestSignal();
+    setInterval(checkAndSendBestSignal, 60 * 1000);
+  }, 10000);
 };
