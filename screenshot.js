@@ -271,7 +271,7 @@ function parseGeminiResponse(text) {
   return result;
 }
 
-module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT) {
+module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId) {
 
   bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
@@ -280,14 +280,12 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     if (bannedUsers.has(userId)) return;
 
     if (!isApproved(userId)) {
-      // Trial check
       if (getTrialScreenshotLeft(userId) <= 0) {
         sendVerifyPrompt(chatId);
         return;
       }
     }
 
-    // Approved user daily limit check
     if (isApproved(userId) && userId !== ADMIN_ID) {
       const count = getUserCount(userId);
       if (count >= 5) {
@@ -299,10 +297,14 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       }
     }
 
+    // আগের signal message delete
+    if (lastSignalMsgId.has(userId)) {
+      try { await bot.deleteMessage(chatId, lastSignalMsgId.get(userId)); } catch (e) {}
+      lastSignalMsgId.delete(userId);
+    }
+
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
-
-    const trialInfo = isApproved(userId) ? '' : '\n📸 Screenshot বাকি: *' + (getTrialScreenshotLeft(userId) - 1) + '/' + FREE_TRIAL_SCREENSHOT + '*';
 
     const loadMsg = await bot.sendMessage(chatId,
       '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
@@ -365,7 +367,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         return;
       }
 
-      // Count increment
       if (isApproved(userId)) {
         incrementUserCount(userId);
       } else {
@@ -395,7 +396,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
 
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
-      await bot.sendMessage(chatId,
+      const sentMsg = await bot.sendMessage(chatId,
         '╭──────────────────╮\n' +
         '│  🧠 *AI Deep Chart Analysis*\n' +
         '╰──────────────────╯\n\n' +
@@ -411,8 +412,14 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         '══════════════════\n' +
         '📸 ' + limitLabel + ': *' + remainingCount + '*\n' +
         '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
-        { parse_mode: 'Markdown' }
+        {
+          parse_mode: 'Markdown',
+          reply_markup: signalInlineKeyboard
+        }
       );
+
+      // screenshot signal message id save
+      lastSignalMsgId.set(userId, sentMsg.message_id);
 
     } catch (e) {
       clearInterval(countdownInterval);
