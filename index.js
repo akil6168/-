@@ -875,6 +875,14 @@ bot.on('callback_query', async (query) => {
   await generateSignalForPair(chatId, userId, pair);
 });
 
+// Sticker file_id getter
+bot.on('sticker', async (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  await bot.sendMessage(msg.chat.id,
+    '📎 *Sticker file\\_id:*\n`' + msg.sticker.file_id + '`',
+    { parse_mode: 'Markdown' }
+  );
+});
 connectDB().then(() => {
   console.log('Bot running v19 - Free Trial System Added...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
