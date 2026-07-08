@@ -884,6 +884,7 @@ bot.on('sticker', async (msg) => {
   );
 });
 connectDB().then(() => {
+  require('./session')(bot);
   console.log('Bot running v19 - Free Trial System Added...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
