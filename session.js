@@ -4,16 +4,17 @@ const twelveData = require('./twelvedata');
 const CHANNEL_ID = '-1002268650240';
 const ADMIN_ID = 5724602667;
 
+// ✅ Updated Sticker file_ids
 const STICKERS = {
-  SESSION_START: 'CAACAguAAxkBAAIH2WpNWwR2hfnDb4wtRGSHKstSu-gBAALnIgACWHFpVlTeidVCL8I3PAQ',
-  SESSION_CLOSE: 'CAACAguAAxkBAAIH2mpNWwTdCNKbp9yznZrC4nDygijlAAIJIAACc3VpVkNdndLynxI-PAQ',
-  CALL: 'CAACAguAAxkBAAIH22pNWwUGR5DrKqvvriS8f6ZEXmYiAALJIgAC5k9pVqeGo-FqhqZxPAQ',
-  PUT: 'CAACAguAAxkBAAIH3GpNWwXLhbVDn1_7F7U1ZKLdgBo8AALqHgACyMJoVqWoJ2kKKy94PAQ',
-  MTG_UP: 'CAACAguAAxkBAAIH3mpNWwfENL7KDzi_QAYdm7tFnslUAAIzMQACMjBpVr5zJRxZHFjYPAQ',
-  MTG_DOWN: 'CAACAguAAxkBAAIH32pNWwcNG3PcaLF1s7TQLyO58fgPAAKTJwACxONpVk9q_2A9wcpPPAQ',
-  NEXT_ONE: 'CAACAguAAxkBAAIH4GpNWwh_U7GGnyqm4Dt9h6jcLwSCAALOIAACKY5oVv-5TOUJuFB8PAQ',
-  ARE_YOU_READY: 'CAACAguAAxkBAAIH3WpNWwYDWsPalq2tcALGnRAuBvRQAALJIAACHXdoVqVbV76nUyGLPAQ',
-  SURESHOT: 'CAACAguAAxkBAAIH1GpNWwR2hfnDb4wtRGSHKstSu-gBAALnIgACWHFpVlTeidVCL8I3PAQ'
+  SESSION_START: 'CAACAgUAAxkBAAIJJ2pPVxYeX2jAiTapeoNVCgMzIWtVAALnIgACWHFpVlTeidVCL8I3PAQ',
+  SESSION_CLOSE: 'CAACAgUAAxkBAAIJKWpPVzu4tb4onZL4742yeSF5y0oLAAIJIAACc3VpVkNdndLynxI-PAQ',
+  CALL:          'CAACAgUAAxkBAAIJK2pPV1ztYYU8_R49EuK5oBmFffV8AALJIgAC5k9pVqeGo-FqhqZxPAQ',
+  PUT:           'CAACAgUAAxkBAAIJLWpPV14vd8gAAWhsbmXWF7ZV1myZkwAC6h4AAsjCaFalqCdpCisveDwE',
+  MTG_UP:        'CAACAgUAAxkBAAIJL2pPV4nrleMPO16j3QjBGH849I43AAIzMQACMjBpVr5zJRxZHFjYPAQ',
+  MTG_DOWN:      'CAACAgUAAxkBAAIJMWpPV4tbhka9zx-VcQPhCriyx0Q8AAKTJwACxONpVk9q_2A9wcpPPAQ',
+  NEXT_ONE:      'CAACAgUAAxkBAAIJM2pPV61SI184RUwfBH6nghFXAZCYAALOIAACKY5oVv-5TOUJuFB8PAQ',
+  ARE_YOU_READY: 'CAACAgUAAxkBAAIJNWpPV8EahWO7lbY1ESG3M2VuyRVHAALJIAACHXdoVqVbV76nUyGLPAQ',
+  SURESHOT:      'CAACAgUAAxkBAAIJN2pPWNbKDC9YJaHXrsaf1uO1aXmoAAKCJQACS0qAVqdi7137PDZoPAQ'
 };
 
 const SESSION_PAIRS = [
@@ -49,6 +50,18 @@ function getBDTime() {
 
 function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
+}
+
+// ─────────────────────────────────────────
+// ✅ SAFE STICKER SENDER
+// ─────────────────────────────────────────
+
+async function safeSendSticker(bot, fileId) {
+  try {
+    await bot.sendSticker(CHANNEL_ID, fileId);
+  } catch (e) {
+    console.log(`⚠️ Sticker send failed: ${e.message}`);
+  }
 }
 
 // ─────────────────────────────────────────
@@ -178,8 +191,7 @@ function calcTrend(candles) {
 
   return {
     dir: up > dn ? 'UP' : 'DOWN',
-    up,
-    dn,
+    up, dn,
     isStrong: up >= 5 || dn >= 5,
     label: up > dn ? 'Strong Uptrend 📈' : 'Strong Downtrend 📉'
   };
@@ -225,7 +237,7 @@ function calcCandlePattern(candles) {
 }
 
 // ─────────────────────────────────────────
-// ✅ FULL ANALYSIS — HIGH ACCURACY
+// ✅ FULL ANALYSIS
 // ─────────────────────────────────────────
 
 async function analyzeSymbol(symbol) {
@@ -245,43 +257,34 @@ async function analyzeSymbol(symbol) {
   let up = 0, dn = 0;
   const signals = [];
 
-  // RSI 14
   if (rsi < 30) { up += 3; signals.push('RSI Oversold'); }
   else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
   else if (rsi < 45) up += 1;
   else if (rsi > 55) dn += 1;
 
-  // RSI 7
   if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); }
   else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
 
-  // StochRSI
   if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); }
   else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
 
-  // MACD
   if (macd > 0) { up += 2; signals.push('MACD Bullish'); }
   else { dn += 2; signals.push('MACD Bearish'); }
 
-  // Bollinger Bands
   if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); }
   else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
 
-  // CCI
   if (cci < -100) { up += 2; signals.push('CCI Oversold'); }
   else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
 
-  // Williams %R
   if (wr < -80) { up += 2; signals.push('Williams %R Oversold'); }
   else if (wr > -20) { dn += 2; signals.push('Williams %R Overbought'); }
 
-  // EMA Trend
   up += trend.up;
   dn += trend.dn;
   if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
   else signals.push('EMA Bearish Alignment');
 
-  // Candle Pattern
   if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); }
   else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
@@ -292,7 +295,6 @@ async function analyzeSymbol(symbol) {
   const volatility = (atr / last) * 100;
   const aiScore = Math.round(ratio * 100);
 
-  // Confidence label
   let confidence = '';
   if (aiScore >= 90) confidence = 'Extreme High 🔥🔥';
   else if (aiScore >= 85) confidence = 'Very High 🔥';
@@ -310,7 +312,6 @@ async function analyzeSymbol(symbol) {
     volatility,
     confidence,
     isSureShot: aiScore >= 90,
-    // ✅ 80%+ এবং Strong Trend এবং Volatility থাকলেই valid
     isValid: ratio >= 0.80 && trend.isStrong && volatility >= 0.005
   };
 }
@@ -349,8 +350,6 @@ async function findBestPair() {
 
 // ─────────────────────────────────────────
 // ✅ CANDLE TIMING
-// পরের মিনিটের :40s এ signal পাঠাবো
-// মানে ২০ সেকেন্ড আগে নতুন candle শুরুর
 // ─────────────────────────────────────────
 
 function waitForSignalTiming() {
@@ -358,7 +357,6 @@ function waitForSignalTiming() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      // :40 থেকে :43 এর মধ্যে signal পাঠাবো
       if (s >= 40 && s <= 43) {
         clearInterval(check);
         resolve();
@@ -372,7 +370,6 @@ function waitForCandleClose() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      // :58-:59 এ candle close ধরবো
       if (s >= 58) {
         clearInterval(check);
         resolve();
@@ -412,30 +409,30 @@ async function sendSignalAndGetResult(bot, signal) {
     { parse_mode: 'Markdown' }
   );
 
-  // ━━━ Step 2: Candle :40s পর্যন্ত অপেক্ষা ━━━
-  console.log(`⏳ Candle timing এর জন্য অপেক্ষা করছি...`);
+  // ━━━ Step 2: :40s পর্যন্ত অপেক্ষা ━━━
+  console.log(`⏳ Candle timing এর জন্য অপেক্ষা...`);
   await waitForSignalTiming();
 
-  // Entry candle কোনটা সেটা বের করো
+  // Entry candle time বের করো
   const nowBD = new Date(Date.now() + 6 * 60 * 60 * 1000);
   const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
   const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
   const entryTime = `${String(nextH % 24).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
 
-  console.log(`📡 Signal timing reached! Entry candle: ${entryTime}`);
+  console.log(`📡 Signal timing! Entry: ${entryTime}`);
 
-  // ━━━ Step 3: SureShot হলে special sticker ━━━
+  // ━━━ Step 3: SureShot sticker ━━━
   if (signal.isSureShot) {
-    await bot.sendSticker(CHANNEL_ID, STICKERS.SURESHOT);
+    await safeSendSticker(bot, STICKERS.SURESHOT);
     await sleep(800);
   }
 
   // ━━━ Step 4: CALL / PUT Sticker ━━━
   const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
-  await bot.sendSticker(CHANNEL_ID, dirSticker);
+  await safeSendSticker(bot, dirSticker);
 
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
-  console.log(`✅ Signal: ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
+  console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
 
   // Entry price নাও
   let entryPrice = signal.currentPrice;
@@ -445,12 +442,12 @@ async function sendSignalAndGetResult(bot, signal) {
     console.log('Entry price refresh failed, using cached.');
   }
 
-  // ━━━ Step 5: Candle Close :58-:59 পর্যন্ত অপেক্ষা ━━━
-  console.log(`⏳ Candle close এর জন্য অপেক্ষা করছি...`);
+  // ━━━ Step 5: Candle Close অপেক্ষা ━━━
+  console.log(`⏳ Candle close এর জন্য অপেক্ষা...`);
   await waitForCandleClose();
-  await sleep(1500); // একটু extra buffer
+  await sleep(1500);
 
-  // ━━━ Step 6: Exit Price নাও ━━━
+  // ━━━ Step 6: Exit Price ━━━
   let exitPrice = entryPrice;
   try {
     exitPrice = await getCurrentPrice(signal.symbol);
@@ -466,8 +463,7 @@ async function sendSignalAndGetResult(bot, signal) {
   console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
 
   if (isWin) {
-    // WIN
-    await bot.sendSticker(CHANNEL_ID, STICKERS.SURESHOT);
+    await safeSendSticker(bot, STICKERS.SURESHOT);
     await sleep(600);
     await bot.sendMessage(CHANNEL_ID,
       `✅ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
@@ -481,9 +477,8 @@ async function sendSignalAndGetResult(bot, signal) {
       { parse_mode: 'Markdown' }
     );
   } else {
-    // LOSS — MTG
     const mtgSticker = signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN;
-    await bot.sendSticker(CHANNEL_ID, mtgSticker);
+    await safeSendSticker(bot, mtgSticker);
     await sleep(600);
     await bot.sendMessage(CHANNEL_ID,
       `❌ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧 : LOSS\n\n` +
@@ -521,11 +516,11 @@ async function runSession(bot, sessionName) {
     const { display, hStr, mStr } = getBDTime();
     console.log(`🏁 ${sessionName} Session শুরু — BD: ${hStr}:${mStr}`);
 
-    // ━━━ Step 1: Session Start Sticker ━━━
-    await bot.sendSticker(CHANNEL_ID, STICKERS.SESSION_START);
+    // ━━━ Session Start Sticker ━━━
+    await safeSendSticker(bot, STICKERS.SESSION_START);
     await sleep(1500);
 
-    // ━━━ Step 2: Opening Message ━━━
+    // ━━━ Opening Message ━━━
     await bot.sendMessage(CHANNEL_ID,
       `🏁 *𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿*\n\n` +
       `📈 সবাই Ready থাকুন\n\n` +
@@ -535,16 +530,15 @@ async function runSession(bot, sessionName) {
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Step 3: ২ মিনিট অপেক্ষা ━━━
+    // ━━━ ২ মিনিট অপেক্ষা ━━━
     await sleep(2 * 60 * 1000);
 
-    // ━━━ Step 4: Are You Ready Sticker ━━━
-    await bot.sendSticker(CHANNEL_ID, STICKERS.ARE_YOU_READY);
+    // ━━━ Are You Ready Sticker ━━━
+    await safeSendSticker(bot, STICKERS.ARE_YOU_READY);
     await sleep(3000);
 
     // ━━━ Session Loop ━━━
-    // সর্বোচ্চ ৩০ মিনিট চলবে, সর্বোচ্চ ৫টা signal
-    const SESSION_DURATION = 30 * 60 * 1000;
+    const SESSION_DURATION = 30 * 60 * 1000; // ৩০ মিনিট
     const sessionStart = Date.now();
     let signalCount = 0;
     const MAX_SIGNALS = 5;
@@ -557,7 +551,7 @@ async function runSession(bot, sessionName) {
       const timeLeft = Math.round((SESSION_DURATION - (Date.now() - sessionStart)) / 60000);
       console.log(`🔍 Scanning... Signal: ${signalCount}/${MAX_SIGNALS} | Time left: ${timeLeft}min`);
 
-      // ━━━ Best Pair খোঁজো ━━━
+      // Best Pair খোঁজো
       const best = await findBestPair();
 
       if (!best) {
@@ -568,28 +562,28 @@ async function runSession(bot, sessionName) {
 
       // প্রথম signal না হলে NEXT_ONE sticker
       if (!isFirstSignal) {
-        await bot.sendSticker(CHANNEL_ID, STICKERS.NEXT_ONE);
+        await safeSendSticker(bot, STICKERS.NEXT_ONE);
         await sleep(2000);
       }
       isFirstSignal = false;
 
-      // ━━━ Signal পাঠাও ও result নাও ━━━
+      // Signal পাঠাও ও result নাও
       await sendSignalAndGetResult(bot, best);
       signalCount++;
 
-      // ━━━ ৫ মিনিট ঘুম — পরের signal এর আগে ━━━
+      // ৫ মিনিট ঘুম
       if (
         signalCount < MAX_SIGNALS &&
         Date.now() - sessionStart < SESSION_DURATION
       ) {
-        console.log(`😴 ৫ মিনিট অপেক্ষা — পরের signal এর জন্য...`);
+        console.log(`😴 ৫ মিনিট অপেক্ষা...`);
         await sleep(5 * 60 * 1000);
       }
     }
 
     // ━━━ Session Close ━━━
     await sleep(2000);
-    await bot.sendSticker(CHANNEL_ID, STICKERS.SESSION_CLOSE);
+    await safeSendSticker(bot, STICKERS.SESSION_CLOSE);
     await sleep(800);
 
     const { display: endDisplay } = getBDTime();
@@ -603,7 +597,7 @@ async function runSession(bot, sessionName) {
       { parse_mode: 'Markdown' }
     );
 
-    console.log(`✅ ${sessionName} Session শেষ | Total Signals: ${signalCount}`);
+    console.log(`✅ ${sessionName} Session শেষ | Total: ${signalCount}`);
     return { started: true, signalCount };
 
   } catch (err) {
@@ -663,6 +657,6 @@ module.exports = function (bot) {
   }, 5000);
 };
 
-// ✅ Admin manual control এর জন্য export
+// ✅ Admin manual control
 module.exports.runSession = runSession;
 module.exports.isSessionRunning = () => sessionRunning;
