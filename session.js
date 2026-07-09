@@ -1,9 +1,8 @@
 // session.js - Qx AI Predictor VIP Session
-const https = require('https');
+const twelveData = require('./twelvedata');
 
 const CHANNEL_ID = '-1002268650240';
 const ADMIN_ID = 5724602667;
-const TWELVE_DATA_KEY = process.env.TWELVE_DATA_KEY_1 || process.env.TWELVE_DATA_KEY;
 
 // ✅ Sticker file_ids
 const STICKERS = {
@@ -45,34 +44,15 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
-function fetchJSON(url) {
-  return new Promise((resolve, reject) => {
-    https.get(url, (res) => {
-      let data = '';
-      res.on('data', c => data += c);
-      res.on('end', () => {
-        try { resolve(JSON.parse(data)); } catch (e) { reject(e); }
-      });
-    }).on('error', reject);
-  });
-}
-
 // ✅ Current price নেবো
 async function getCurrentPrice(symbol) {
-  const url = `https://api.twelvedata.com/price?symbol=${symbol}&apikey=${TWELVE_DATA_KEY}`;
-  const data = await fetchJSON(url);
+  const data = await twelveData.getPrice(symbol);
   return parseFloat(data.price);
-}
-
-// ✅ Chart image URL বানাবো
-function getChartUrl(symbol) {
-  return `https://api.twelvedata.com/time_series/chart?symbol=${symbol}&interval=1min&outputsize=30&chart_type=candlestick&apikey=${TWELVE_DATA_KEY}`;
 }
 
 // ✅ Candle data নেবো
 async function getCandles(symbol) {
-  const url = `https://api.twelvedata.com/time_series?symbol=${symbol}&interval=1min&outputsize=30&apikey=${TWELVE_DATA_KEY}`;
-  const data = await fetchJSON(url);
+  const data = await twelveData.getTimeSeries(symbol, '1min', 30);
   if (!data.values || !data.values.length) throw new Error('No data');
 
   const lastCandleTime = new Date(data.values[0].datetime + ' UTC');
@@ -150,7 +130,8 @@ function calcTrend(candles) {
   if (last > ema20) up += 1; else dn += 1;
   if (ema5 > ema10 && ema10 > ema20) up += 2;
   else if (ema5 < ema10 && ema10 < ema20) dn += 2;
-  return { dir: up > dn ? 'UP' : 'DOWN', up, dn, isStrong: up >= 6 || dn >= 6 };
+  // আগে >= 6 ছিল (8 এর মধ্যে) — খুব strict, signal প্রায় আসতোই না
+  return { dir: up > dn ? 'UP' : 'DOWN', up, dn, isStrong: up >= 5 || dn >= 5 };
 }
 
 function calcCandlePattern(candles) {
@@ -232,10 +213,11 @@ async function analyzeForSession(symbol) {
   const direction = up >= dn ? 'UP' : 'DOWN';
   const volatility = (atr / last) * 100;
 
-  // Session এ শুধু Very High confidence
-  if (ratio < 0.82) return null;
+  // আগে ratio < 0.82 হলে বাদ দিত — অনেক strict ছিল, তাই session-এ signal আসতোই না।
+  // 0.75 এ নামানো হলো — এখনও মোটামুটি high-confidence signal-ই পাস করবে।
+  if (ratio < 0.75) return null;
   if (!trend.isStrong) return null;
-  if (volatility < 0.01) return null;
+  if (volatility < 0.008) return null;
 
   return {
     symbol,
@@ -261,6 +243,8 @@ async function collectSessionSignals(count = 5) {
         result.flag = pair.flag;
         results.push(result);
         console.log(`✅ Session signal: ${pair.symbol} ${result.direction} ${result.aiScore}%`);
+      } else {
+        console.log(`⏭️ ${pair.symbol}: থ্রেশহোল্ড পাস করেনি (weak/neutral)`);
       }
       await sleep(1500);
     } catch (e) {
@@ -388,8 +372,18 @@ async function sendOneSignal(bot, signal, signalNum, totalSignals) {
   }
 }
 
+// ✅ একই সময় দুইটা session চলা ঠেকানোর জন্য lock (auto + manual দুটোই এটা মানবে)
+let sessionRunning = false;
+
 // ✅ Full Session চালাবো
 async function runSession(bot, sessionName) {
+  if (sessionRunning) {
+    console.log(`⚠️ ${sessionName} Session শুরু করা যায়নি — অন্য একটা session ইতিমধ্যে চলছে।`);
+    return { started: false, reason: 'already_running' };
+  }
+  sessionRunning = true;
+
+  try {
   const { hStr, mStr } = getBDTime();
   console.log(`🏁 ${sessionName} Session শুরু হচ্ছে — BD: ${hStr}:${mStr}`);
 
@@ -426,7 +420,7 @@ async function runSession(bot, sessionName) {
 
     // Session Close
     await bot.sendSticker(CHANNEL_ID, STICKERS.SESSION_CLOSE);
-    return;
+    return { started: true, signalCount: 0 };
   }
 
   await bot.sendMessage(CHANNEL_ID,
@@ -466,6 +460,10 @@ async function runSession(bot, sessionName) {
   );
 
   console.log(`✅ ${sessionName} Session শেষ`);
+  return { started: true };
+  } finally {
+    sessionRunning = false;
+  }
 }
 
 module.exports = function(bot) {
@@ -508,3 +506,7 @@ module.exports = function(bot) {
 
   }, 5000);
 };
+
+// ✅ Admin panel থেকে যেকোনো সময় manually session চালানোর জন্য export করা হলো
+module.exports.runSession = runSession;
+module.exports.isSessionRunning = () => sessionRunning;
