@@ -533,7 +533,7 @@ bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   const targetId = parseInt(match[1]);
   const text = match[2];
   try {
-    await await bot.sendMessage(targetId, '💬 Admin Message:\n\n' + text);
+    await bot.sendMessage(targetId, '💬 Admin Message:\n\n' + text);
     await bot.sendMessage(ADMIN_ID, '✅ Message পাঠানো হয়েছে `' + targetId + '` কে।', { parse_mode: 'Markdown' });
   } catch (e) {
     await bot.sendMessage(ADMIN_ID, '❌ Message পাঠানো যায়নি (হয়তো user bot block করেছে বা কখনো /start দেয়নি)।\nError: ' + e.message);
@@ -576,7 +576,12 @@ bot.on('message', async (msg) => {
     broadcastMode.delete(userId);
     let successCount = 0;
     for (const uid of startedUsers) {
-     await bot.sendMessage(uid, '📢 Admin Message:\n\n' + text); successCount++; } catch (e) { console.error('broadcast fail for', uid, e.message); }
+      try {
+        await bot.sendMessage(uid, '📢 Admin Message:\n\n' + text);
+        successCount++;
+      } catch (e) {
+        console.error('broadcast fail for', uid, e.message);
+      }
     }
     await bot.sendMessage(ADMIN_ID, '✅ Broadcast sent to ' + successCount + ' users!');
     return;
