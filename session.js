@@ -1,4 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (Upgraded)
+// session.js - Qx AI Predictor VIP Session (Upgraded & Fixed)
 const twelveData = require('./twelvedata');
 
 const CHANNEL_ID = '-1002268650240';
@@ -29,6 +29,24 @@ const SESSION_PAIRS = [
 ];
 
 // ─────────────────────────────────────────
+// ✅ SESSION STATE MANAGEMENT (IMPROVED)
+// ─────────────────────────────────────────
+
+let sessionRunning = false;
+let sessionLockTimestamp = 0;
+let currentSessionId = null;
+let schedulerInitialized = false;
+let schedulerInterval = null;
+
+// Track sent signals and sessions to prevent duplicates
+const sentSignals = new Map(); // Map<signalKey, timestamp>
+const completedSessions = new Map(); // Map<sessionKey, timestamp>
+const sentReminders = new Map(); // Map<reminderKey, timestamp>
+
+// Lock timeout (if session hangs, allow restart after 45 minutes)
+const SESSION_LOCK_TIMEOUT = 45 * 60 * 1000;
+
+// ─────────────────────────────────────────
 // ✅ HELPER FUNCTIONS
 // ─────────────────────────────────────────
 
@@ -44,7 +62,8 @@ function getBDTime() {
     hStr: String(h).padStart(2, '0'),
     mStr: String(m).padStart(2, '0'),
     sStr: String(s).padStart(2, '0'),
-    display: `${h12}:${String(m).padStart(2, '0')} ${period}`
+    display: `${h12}:${String(m).padStart(2, '0')} ${period}`,
+    dateKey: `${bd.getUTCFullYear()}-${bd.getUTCMonth()}-${bd.getUTCDate()}`
   };
 }
 
@@ -52,16 +71,115 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+function generateSessionKey(sessionName) {
+  const { dateKey, h } = getBDTime();
+  return `${dateKey}-${sessionName}-${h}`;
+}
+
+function generateSignalKey(symbol, direction) {
+  const { dateKey, h, m } = getBDTime();
+  return `${dateKey}-${h}-${Math.floor(m / 5)}-${symbol}-${direction}`;
+}
+
+function generateReminderKey(type) {
+  const { dateKey, h, m } = getBDTime();
+  return `${dateKey}-${type}-${h}-${m}`;
+}
+
+// Clean old entries from tracking maps (older than 2 hours)
+function cleanupOldEntries() {
+  const now = Date.now();
+  const maxAge = 2 * 60 * 60 * 1000;
+
+  for (const [key, timestamp] of sentSignals.entries()) {
+    if (now - timestamp > maxAge) sentSignals.delete(key);
+  }
+  for (const [key, timestamp] of completedSessions.entries()) {
+    if (now - timestamp > maxAge) completedSessions.delete(key);
+  }
+  for (const [key, timestamp] of sentReminders.entries()) {
+    if (now - timestamp > maxAge) sentReminders.delete(key);
+  }
+}
+
 // ─────────────────────────────────────────
-// ✅ SAFE STICKER SENDER
+// ✅ SESSION LOCK MANAGEMENT
 // ─────────────────────────────────────────
 
-async function safeSendSticker(bot, fileId) {
-  try {
-    await bot.sendSticker(CHANNEL_ID, fileId);
-  } catch (e) {
-    console.log(`⚠️ Sticker send failed: ${e.message}`);
+function acquireSessionLock(sessionName) {
+  const now = Date.now();
+
+  // If session is running but lock is stale, release it
+  if (sessionRunning && sessionLockTimestamp > 0) {
+    if (now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
+      console.log(`⚠️ Session lock timeout detected, releasing stale lock`);
+      releaseSessionLock();
+    }
   }
+
+  if (sessionRunning) {
+    return false;
+  }
+
+  sessionRunning = true;
+  sessionLockTimestamp = now;
+  currentSessionId = `${sessionName}-${now}`;
+  console.log(`🔒 Session lock acquired: ${currentSessionId}`);
+  return true;
+}
+
+function releaseSessionLock() {
+  console.log(`🔓 Session lock released: ${currentSessionId}`);
+  sessionRunning = false;
+  sessionLockTimestamp = 0;
+  currentSessionId = null;
+}
+
+function isSessionLocked() {
+  if (!sessionRunning) return false;
+
+  // Check for stale lock
+  const now = Date.now();
+  if (sessionLockTimestamp > 0 && now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
+    console.log(`⚠️ Stale session lock detected`);
+    return false;
+  }
+
+  return true;
+}
+
+// ─────────────────────────────────────────
+// ✅ SAFE STICKER SENDER (with retry prevention)
+// ─────────────────────────────────────────
+
+async function safeSendSticker(bot, fileId, retries = 1) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      await bot.sendSticker(CHANNEL_ID, fileId);
+      return true;
+    } catch (e) {
+      console.log(`⚠️ Sticker send failed (attempt ${attempt}): ${e.message}`);
+      if (attempt < retries) await sleep(1000);
+    }
+  }
+  return false;
+}
+
+// ─────────────────────────────────────────
+// ✅ SAFE MESSAGE SENDER (with duplicate prevention)
+// ─────────────────────────────────────────
+
+async function safeSendMessage(bot, text, options = {}, retries = 1) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await bot.sendMessage(CHANNEL_ID, text, options);
+      return result;
+    } catch (e) {
+      console.log(`⚠️ Message send failed (attempt ${attempt}): ${e.message}`);
+      if (attempt < retries) await sleep(1000);
+    }
+  }
+  return null;
 }
 
 // ─────────────────────────────────────────
@@ -342,6 +460,7 @@ async function findBestPair() {
       await sleep(1200);
     } catch (e) {
       console.log(`❌ ${pair.symbol}: ${e.message}`);
+      await sleep(500);
     }
   }
 
@@ -362,6 +481,12 @@ function waitForSignalTiming() {
         resolve();
       }
     }, 500);
+
+    // Safety timeout after 30 seconds
+    setTimeout(() => {
+      clearInterval(check);
+      resolve();
+    }, 30000);
   });
 }
 
@@ -375,153 +500,183 @@ function waitForCandleClose() {
         resolve();
       }
     }, 500);
+
+    // Safety timeout after 30 seconds
+    setTimeout(() => {
+      clearInterval(check);
+      resolve();
+    }, 30000);
   });
 }
 
 // ─────────────────────────────────────────
-// ✅ SINGLE SIGNAL FLOW
+// ✅ SINGLE SIGNAL FLOW (FIXED - No duplicate signals)
 // ─────────────────────────────────────────
 
 async function sendSignalAndGetResult(bot, signal) {
+  // Generate unique signal key to prevent duplicates
+  const signalKey = generateSignalKey(signal.symbol, signal.direction);
+
+  // Check if this signal was already sent
+  if (sentSignals.has(signalKey)) {
+    console.log(`⚠️ Signal already sent: ${signalKey}, skipping duplicate`);
+    return null;
+  }
+
+  // Mark signal as sent immediately to prevent race conditions
+  sentSignals.set(signalKey, Date.now());
+
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : '';
-
-  // ━━━ Step 1: Asset Info Message ━━━
-  await bot.sendMessage(CHANNEL_ID,
-    `╔══════════════════════╗\n` +
-    `     🚀 𝗤𝘅 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝗜𝗣\n` +
-    `╚══════════════════════╝\n\n` +
-    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎯 𝗤𝘅 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘   ➜ ${signal.aiScore}%\n` +
-    `🔥 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ${signal.confidence}\n` +
-    `📊 𝗧𝗥𝗘𝗡𝗗      ➜ ${signal.trend.label}\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `📌 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n` +
-    signal.signals.map(s => `• ${s}`).join('\n') + '\n' +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
-    `• Maximum 1 Step MTG\n` +
-    `• Never Overtrade\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
-    `⚠️ Trade at your own risk.`,
-    { parse_mode: 'Markdown' }
-  );
-
-  // ━━━ Step 2: :40s পর্যন্ত অপেক্ষা ━━━
-  console.log(`⏳ Candle timing এর জন্য অপেক্ষা...`);
-  await waitForSignalTiming();
-
-  // Entry candle time বের করো
-  const nowBD = new Date(Date.now() + 6 * 60 * 60 * 1000);
-  const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
-  const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
-  const entryTime = `${String(nextH % 24).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
-
-  console.log(`📡 Signal timing! Entry: ${entryTime}`);
-
-  // ━━━ Step 3: SureShot sticker ━━━
-  if (signal.isSureShot) {
-    await safeSendSticker(bot, STICKERS.SURESHOT);
-    await sleep(800);
-  }
-
-  // ━━━ Step 4: CALL / PUT Sticker ━━━
-  const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
-  await safeSendSticker(bot, dirSticker);
-
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
-  console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
 
-  // Entry price নাও
-  let entryPrice = signal.currentPrice;
   try {
-    entryPrice = await getCurrentPrice(signal.symbol);
-  } catch (e) {
-    console.log('Entry price refresh failed, using cached.');
-  }
-
-  // ━━━ Step 5: Candle Close অপেক্ষা ━━━
-  console.log(`⏳ Candle close এর জন্য অপেক্ষা...`);
-  await waitForCandleClose();
-  await sleep(1500);
-
-  // ━━━ Step 6: Exit Price ━━━
-  let exitPrice = entryPrice;
-  try {
-    exitPrice = await getCurrentPrice(signal.symbol);
-  } catch (e) {
-    console.log('Exit price error: ' + e.message);
-  }
-
-  // ━━━ Step 7: WIN / LOSS ━━━
-  const isWin = signal.direction === 'UP'
-    ? exitPrice > entryPrice
-    : exitPrice < entryPrice;
-
-  console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
-
-  if (isWin) {
-    await safeSendSticker(bot, STICKERS.SURESHOT);
-    await sleep(600);
-    await bot.sendMessage(CHANNEL_ID,
-      `✅ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
-      `━━━━━━━━━━━━━━━━━━━\n` +
-      `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
-      `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
-      `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : WIN ✅\n` +
-      `━━━━━━━━━━━━━━━━━━━\n\n` +
-      `🎯 SURESHOT ✅\n\n` +
-      `💎 𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿 : @AkiL_xD`,
+    // ━━━ Step 1: Asset Info Message (Analysis complete, show details) ━━━
+    await safeSendMessage(bot,
+      `╔══════════════════════╗\n` +
+      `     🚀 𝗤𝘅 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝗜𝗣\n` +
+      `╚══════════════════════╝\n\n` +
+      `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🎯 𝗤𝘅 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘   ➜ ${signal.aiScore}%\n` +
+      `🔥 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ${signal.confidence}\n` +
+      `📊 𝗧𝗥𝗘𝗡𝗗      ➜ ${signal.trend.label}\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `📌 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n` +
+      signal.signals.map(s => `• ${s}`).join('\n') + '\n' +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
+      `• Maximum 1 Step MTG\n` +
+      `• Never Overtrade\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
+      `⚠️ Trade at your own risk.`,
       { parse_mode: 'Markdown' }
     );
-  } else {
-    const mtgSticker = signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN;
-    await safeSendSticker(bot, mtgSticker);
-    await sleep(600);
-    await bot.sendMessage(CHANNEL_ID,
-      `❌ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧 : LOSS\n\n` +
-      `━━━━━━━━━━━━━━━━━━━\n` +
-      `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
-      `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
-      `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : LOSS ❌\n` +
-      `━━━━━━━━━━━━━━━━━━━\n\n` +
-      `💪 Wait a recovery signal`,
-      { parse_mode: 'Markdown' }
-    );
-  }
 
-  return isWin;
+    // ━━━ Step 2: :40s পর্যন্ত অপেক্ষা ━━━
+    console.log(`⏳ Candle timing এর জন্য অপেক্ষা...`);
+    await waitForSignalTiming();
+
+    // Entry candle time বের করো
+    const nowBD = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
+    const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
+    const entryTime = `${String(nextH % 24).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
+
+    console.log(`📡 Signal timing! Entry: ${entryTime}`);
+
+    // ━━━ Step 3: CALL / PUT Sticker ONLY (No SureShot before result) ━━━
+    const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
+    await safeSendSticker(bot, dirSticker);
+
+    console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
+
+    // Entry price নাও
+    let entryPrice = signal.currentPrice;
+    try {
+      entryPrice = await getCurrentPrice(signal.symbol);
+    } catch (e) {
+      console.log('Entry price refresh failed, using cached.');
+    }
+
+    // ━━━ Step 4: Candle Close অপেক্ষা ━━━
+    console.log(`⏳ Candle close এর জন্য অপেক্ষা...`);
+    await waitForCandleClose();
+    await sleep(1500);
+
+    // ━━━ Step 5: Exit Price ━━━
+    let exitPrice = entryPrice;
+    try {
+      exitPrice = await getCurrentPrice(signal.symbol);
+    } catch (e) {
+      console.log('Exit price error: ' + e.message);
+    }
+
+    // ━━━ Step 6: WIN / LOSS (SureShot shown ONLY on WIN) ━━━
+    const isWin = signal.direction === 'UP'
+      ? exitPrice > entryPrice
+      : exitPrice < entryPrice;
+
+    console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+
+    if (isWin) {
+      // ✅ SURESHOT sticker ONLY shown after confirmed WIN
+      await safeSendSticker(bot, STICKERS.SURESHOT);
+      await sleep(600);
+      await safeSendMessage(bot,
+        `✅ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
+        `━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
+        `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
+        `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : WIN ✅\n` +
+        `━━━━━━━━━━━━━━━━━━━\n\n` +
+        `🎯 SURESHOT ✅\n\n` +
+        `💎 𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿 : @AkiL_xD`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      const mtgSticker = signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN;
+      await safeSendSticker(bot, mtgSticker);
+      await sleep(600);
+      await safeSendMessage(bot,
+        `❌ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧 : LOSS\n\n` +
+        `━━━━━━━━━━━━━━━━━━━\n` +
+        `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
+        `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
+        `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : LOSS ❌\n` +
+        `━━━━━━━━━━━━━━━━━━━\n\n` +
+        `💪 Wait a recovery signal`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+
+    return isWin;
+
+  } catch (error) {
+    console.error(`❌ Signal error for ${signal.symbol}: ${error.message}`);
+    // Don't remove from sentSignals - we already tried to send it
+    return null;
+  }
 }
 
 // ─────────────────────────────────────────
-// ✅ SESSION LOCK
+// ✅ MAIN SESSION RUNNER (IMPROVED LOCKING)
 // ─────────────────────────────────────────
 
-let sessionRunning = false;
+async function runSession(bot, sessionName, isManual = false) {
+  // Generate session key to prevent duplicate sessions
+  const sessionKey = generateSessionKey(sessionName);
 
-// ─────────────────────────────────────────
-// ✅ MAIN SESSION RUNNER
-// ─────────────────────────────────────────
+  // Check if this session was already completed recently (within 25 minutes)
+  if (!isManual && completedSessions.has(sessionKey)) {
+    const lastRun = completedSessions.get(sessionKey);
+    const timeSince = Date.now() - lastRun;
+    if (timeSince < 25 * 60 * 1000) {
+      console.log(`⚠️ ${sessionName} — session already completed ${Math.round(timeSince / 60000)} minutes ago, skipping.`);
+      return { started: false, reason: 'already_completed' };
+    }
+  }
 
-async function runSession(bot, sessionName) {
-  if (sessionRunning) {
-    console.log(`⚠️ ${sessionName} — অন্য session চলছে, skip।`);
+  // Try to acquire session lock
+  if (!acquireSessionLock(sessionName)) {
+    console.log(`⚠️ ${sessionName} — another session is running, skipping.`);
     return { started: false, reason: 'already_running' };
   }
-  sessionRunning = true;
 
   try {
     const { display, hStr, mStr } = getBDTime();
     console.log(`🏁 ${sessionName} Session শুরু — BD: ${hStr}:${mStr}`);
+
+    // Mark session as started
+    completedSessions.set(sessionKey, Date.now());
 
     // ━━━ Session Start Sticker ━━━
     await safeSendSticker(bot, STICKERS.SESSION_START);
     await sleep(1500);
 
     // ━━━ Opening Message ━━━
-    await bot.sendMessage(CHANNEL_ID,
+    await safeSendMessage(bot,
       `🏁 *𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿*\n\n` +
       `📈 সবাই Ready থাকুন\n\n` +
       `⏰ সময়: ${display} (BD Time)\n\n` +
@@ -548,11 +703,24 @@ async function runSession(bot, sessionName) {
       Date.now() - sessionStart < SESSION_DURATION &&
       signalCount < MAX_SIGNALS
     ) {
+      // Check if lock is still valid
+      if (!sessionRunning) {
+        console.log(`⚠️ Session lock lost, stopping session`);
+        break;
+      }
+
       const timeLeft = Math.round((SESSION_DURATION - (Date.now() - sessionStart)) / 60000);
       console.log(`🔍 Scanning... Signal: ${signalCount}/${MAX_SIGNALS} | Time left: ${timeLeft}min`);
 
       // Best Pair খোঁজো
-      const best = await findBestPair();
+      let best = null;
+      try {
+        best = await findBestPair();
+      } catch (e) {
+        console.error(`❌ Error finding best pair: ${e.message}`);
+        await sleep(60000); // Wait 1 minute on error
+        continue;
+      }
 
       if (!best) {
         console.log('⏭️ Valid signal নেই, ৩ মিনিট পরে retry...');
@@ -568,8 +736,15 @@ async function runSession(bot, sessionName) {
       isFirstSignal = false;
 
       // Signal পাঠাও ও result নাও
-      await sendSignalAndGetResult(bot, best);
-      signalCount++;
+      try {
+        const result = await sendSignalAndGetResult(bot, best);
+        if (result !== null) {
+          signalCount++;
+        }
+      } catch (e) {
+        console.error(`❌ Signal error: ${e.message}`);
+        // Continue with next signal instead of stopping
+      }
 
       // ৫ মিনিট ঘুম
       if (
@@ -587,7 +762,7 @@ async function runSession(bot, sessionName) {
     await sleep(800);
 
     const { display: endDisplay } = getBDTime();
-    await bot.sendMessage(CHANNEL_ID,
+    await safeSendMessage(bot,
       `🏁 *${sessionName} Session শেষ হয়েছে!*\n\n` +
       `⏰ সময়: ${endDisplay} (BD Time)\n` +
       `📊 *Total Signals:* ${signalCount}\n\n` +
@@ -604,51 +779,89 @@ async function runSession(bot, sessionName) {
     console.error(`💥 Session error: ${err.message}`);
     throw err;
   } finally {
-    sessionRunning = false;
+    releaseSessionLock();
+    // Cleanup old entries
+    cleanupOldEntries();
   }
 }
 
 // ─────────────────────────────────────────
-// ✅ AUTO SCHEDULER
+// ✅ AUTO SCHEDULER (SINGLETON - PREVENTS DUPLICATE INTERVALS)
 // ─────────────────────────────────────────
 
 module.exports = function (bot) {
+  // Prevent multiple scheduler initializations
+  if (schedulerInitialized) {
+    console.log('⚠️ Scheduler already initialized, skipping duplicate initialization');
+    return;
+  }
+
+  schedulerInitialized = true;
   console.log('✅ Session scheduler started!');
 
-  setInterval(async () => {
+  // Clear any existing interval (safety measure)
+  if (schedulerInterval) {
+    clearInterval(schedulerInterval);
+    schedulerInterval = null;
+  }
+
+  schedulerInterval = setInterval(async () => {
     try {
       const { h, m, s } = getBDTime();
 
       // Morning Reminder — ৯:৩০
       if (h === 9 && m === 30 && s < 10) {
-        await bot.sendMessage(CHANNEL_ID,
-          `⏰ *Morning Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
-          `🕙 সকাল ১০:০০ টায় শুরু হবে\n` +
-          `📊 সবাই রেডি থাকুন! ✅\n\n` +
-          `💹 আজকের Best Signals নিয়ে আসছি!`,
-          { parse_mode: 'Markdown' }
-        );
+        const reminderKey = generateReminderKey('morning_reminder');
+        if (!sentReminders.has(reminderKey)) {
+          sentReminders.set(reminderKey, Date.now());
+          await safeSendMessage(bot,
+            `⏰ *Morning Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
+            `🕙 সকাল ১০:০০ টায় শুরু হবে\n` +
+            `📊 সবাই রেডি থাকুন! ✅\n\n` +
+            `💹 আজকের Best Signals নিয়ে আসছি!`,
+            { parse_mode: 'Markdown' }
+          );
+        }
       }
 
       // Morning Session — ১০:০০
       if (h === 10 && m === 0 && s < 10) {
-        runSession(bot, '🌅 Morning').catch(console.error);
+        const sessionKey = generateSessionKey('🌅 Morning');
+        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
+          runSession(bot, '🌅 Morning', false).catch(err => {
+            console.error('Morning session error:', err.message);
+          });
+        }
       }
 
       // Evening Reminder — ২০:৩০
       if (h === 20 && m === 30 && s < 10) {
-        await bot.sendMessage(CHANNEL_ID,
-          `🌙 *Evening Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
-          `🕙 রাত ৯:০০ টায় শুরু হবে\n` +
-          `📊 সবাই রেডি থাকুন! ✅\n\n` +
-          `💹 Evening এর Best Signals নিয়ে আসছি!`,
-          { parse_mode: 'Markdown' }
-        );
+        const reminderKey = generateReminderKey('evening_reminder');
+        if (!sentReminders.has(reminderKey)) {
+          sentReminders.set(reminderKey, Date.now());
+          await safeSendMessage(bot,
+            `🌙 *Evening Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
+            `🕙 রাত ৯:০০ টায় শুরু হবে\n` +
+            `📊 সবাই রেডি থাকুন! ✅\n\n` +
+            `💹 Evening এর Best Signals নিয়ে আসছি!`,
+            { parse_mode: 'Markdown' }
+          );
+        }
       }
 
       // Evening Session — ২১:০০
       if (h === 21 && m === 0 && s < 10) {
-        runSession(bot, '🌙 Evening').catch(console.error);
+        const sessionKey = generateSessionKey('🌙 Evening');
+        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
+          runSession(bot, '🌙 Evening', false).catch(err => {
+            console.error('Evening session error:', err.message);
+          });
+        }
+      }
+
+      // Cleanup old entries every hour
+      if (m === 0 && s < 10) {
+        cleanupOldEntries();
       }
 
     } catch (e) {
@@ -657,6 +870,17 @@ module.exports = function (bot) {
   }, 5000);
 };
 
-// ✅ Admin manual control
-module.exports.runSession = runSession;
+// ✅ Admin manual control (with isManual flag)
+module.exports.runSession = (bot, sessionName) => runSession(bot, sessionName, true);
 module.exports.isSessionRunning = () => sessionRunning;
+
+// ✅ Cleanup function for graceful shutdown
+module.exports.cleanup = () => {
+  if (schedulerInterval) {
+    clearInterval(schedulerInterval);
+    schedulerInterval = null;
+  }
+  schedulerInitialized = false;
+  releaseSessionLock();
+  console.log('✅ Session scheduler cleaned up');
+};
