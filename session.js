@@ -1,4 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (Pro v6.0 + Chart + Extra Indicators)
+// session.js - Qx AI Predictor VIP Session (v6.0 + High Accuracy Indicators)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -53,7 +53,7 @@ const TRADING_SCHEDULE = [
 class PerformanceTracker {
   constructor() {
     this.statsFile = path.join(__dirname, 'stats.json');
-    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {} };
+    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {}, mtg: { total: 0, wins: 0, losses: 0 } };
     this.loadStats();
   }
   loadStats() {
@@ -62,21 +62,34 @@ class PerformanceTracker {
   saveStats() {
     try { fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2)); } catch(e) {}
   }
-  addResult(symbol, direction, isWin) {
+  addResult(symbol, direction, isWin, isMTG = false) {
     const today = getBDTime().dateKey;
     this.stats.total++;
     if (isWin) this.stats.wins++; else this.stats.losses++;
     this.stats.winRate = (this.stats.wins / this.stats.total * 100);
+    
+    if (isMTG) {
+      this.stats.mtg.total++;
+      if (isWin) this.stats.mtg.wins++; else this.stats.mtg.losses++;
+    }
+    
     if (!this.stats.pairs[symbol]) this.stats.pairs[symbol] = { wins: 0, losses: 0 };
     if (isWin) this.stats.pairs[symbol].wins++; else this.stats.pairs[symbol].losses++;
-    if (!this.stats.daily[today]) this.stats.daily[today] = { wins: 0, losses: 0 };
-    if (isWin) this.stats.daily[today].wins++; else this.stats.daily[today].losses++;
+    
+    if (!this.stats.daily[today]) this.stats.daily[today] = { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
+    if (isWin) {
+      if (isMTG) this.stats.daily[today].mtgWins++; else this.stats.daily[today].wins++;
+    } else {
+      if (isMTG) this.stats.daily[today].mtgLosses++; else this.stats.daily[today].losses++;
+    }
     this.saveStats();
   }
   getStatsMessage() {
-    const { total, wins, losses, winRate, pairs } = this.stats;
+    const { total, wins, losses, winRate, pairs, mtg } = this.stats;
     const today = getBDTime().dateKey;
-    const daily = this.stats.daily[today] || { wins: 0, losses: 0 };
+    const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
+    const mtgRate = mtg.total > 0 ? (mtg.wins / mtg.total * 100) : 0;
+    
     let pairStats = '';
     const sortedPairs = Object.entries(pairs).sort((a,b) => (b[1].wins+b[1].losses) - (a[1].wins+a[1].losses));
     for (const [symbol, data] of sortedPairs.slice(0,5)) {
@@ -91,9 +104,11 @@ class PerformanceTracker {
 ✅ **WINS**: ${wins}
 ❌ **LOSSES**: ${losses}
 🎯 **WIN RATE**: ${winRate.toFixed(1)}%
+🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})
 ━━━━━━━━━━━━━━━━━━━
 
 📅 **TODAY**: ${daily.wins}W / ${daily.losses}L
+🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L
 
 📊 **TOP PAIRS**
 ${pairStats || '  No data yet'}
@@ -103,10 +118,17 @@ ${pairStats || '  No data yet'}
   }
   getTodayStats() {
     const today = getBDTime().dateKey;
-    const daily = this.stats.daily[today] || { wins: 0, losses: 0 };
-    const totalToday = daily.wins + daily.losses;
-    const rate = totalToday > 0 ? (daily.wins / totalToday * 100) : 0;
-    return { ...daily, total: totalToday, rate };
+    const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
+    const totalToday = daily.wins + daily.losses + daily.mtgWins + daily.mtgLosses;
+    const rate = totalToday > 0 ? ((daily.wins + daily.mtgWins) / totalToday * 100) : 0;
+    return { 
+      wins: daily.wins + daily.mtgWins, 
+      losses: daily.losses + daily.mtgLosses, 
+      total: totalToday, 
+      rate,
+      mtgWins: daily.mtgWins,
+      mtgLosses: daily.mtgLosses
+    };
   }
 }
 
@@ -127,6 +149,9 @@ const completedSessions = new Map();
 const sentReminders = new Map();
 const SESSION_LOCK_TIMEOUT = 45 * 60 * 1000;
 const lastResults = [];
+let isRecoveryMode = false;
+let recoveryAttempts = 0;
+const MAX_RECOVERY_ATTEMPTS = 5;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🛠️ HELPERS
@@ -143,7 +168,8 @@ function getBDTime() {
     mStr: String(m).padStart(2,'0'),
     sStr: String(s).padStart(2,'0'),
     display: `${h12}:${String(m).padStart(2,'0')} ${period}`,
-    dateKey: `${bd.getUTCFullYear()}-${String(bd.getUTCMonth()+1).padStart(2,'0')}-${String(bd.getUTCDate()).padStart(2,'0')}`
+    dateKey: `${bd.getUTCFullYear()}-${String(bd.getUTCMonth()+1).padStart(2,'0')}-${String(bd.getUTCDate()).padStart(2,'0')}`,
+    fullTime: `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`
   };
 }
 
@@ -183,6 +209,8 @@ function releaseSessionLock() {
   sessionRunning = false;
   sessionLockTimestamp = 0;
   currentSessionId = null;
+  isRecoveryMode = false;
+  recoveryAttempts = 0;
 }
 
 function isSessionLocked() {
@@ -293,14 +321,16 @@ async function getCandles(symbol, count = 50, interval = '1min') {
   const diffMinutes = (new Date() - lastCandleTime) / (60 * 1000);
   if (diffMinutes > 5) throw new Error('Stale data');
   return data.values.map(v => ({
-    open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0
+    open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0,
+    datetime: v.datetime
   })).reverse();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 TECHNICAL ANALYSIS (all indicators)
+// 📈 HIGH ACCURACY INDICATORS (14 Indicators)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+// 1. RSI (14) - মূল RSI
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let gain = 0, loss = 0;
@@ -311,26 +341,35 @@ function calcRSI(candles, period = 14) {
   return 100 - (100 / (1 + gain / (loss || 1)));
 }
 
-function calcEMA(candles, period) {
-  if (candles.length < 2) return candles[0].close;
-  const k = 2 / (period + 1);
-  let ema = candles[0].close;
-  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
-  return ema;
+// 2. MACD
+function calcMACD(candles) {
+  return calcEMA(candles, 12) - calcEMA(candles, 26);
 }
 
-function calcMACD(candles) { return calcEMA(candles, 12) - calcEMA(candles, 26); }
-
-function calcStochRSI(candles, period = 14) {
-  const rsiArr = [];
-  for (let i = period; i < candles.length; i++) rsiArr.push(calcRSI(candles.slice(0, i+1), period));
-  if (rsiArr.length < period) return 50;
-  const rec = rsiArr.slice(-period);
-  const mn = Math.min(...rec), mx = Math.max(...rec);
-  if (mx === mn) return 50;
-  return ((rsiArr[rsiArr.length - 1] - mn) / (mx - mn)) * 100;
+// 3. ADX
+function calcADX(candles, period = 14) {
+  if (candles.length < period + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
+  let plusDM = [], minusDM = [], tr = [];
+  for (let i = 1; i < candles.length; i++) {
+    const upMove = candles[i].high - candles[i-1].high;
+    const downMove = candles[i-1].low - candles[i].low;
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    tr.push(Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i-1].close),
+      Math.abs(candles[i].low - candles[i-1].close)
+    ));
+  }
+  const sum = arr => arr.slice(-period).reduce((a,b) => a+b, 0);
+  const trSum = sum(tr) || 1;
+  const plusDI = 100 * (sum(plusDM) / trSum);
+  const minusDI = 100 * (sum(minusDM) / trSum);
+  const adx = 100 * Math.abs(plusDI - minusDI) / ((plusDI + minusDI) || 1);
+  return { adx, plusDI, minusDI };
 }
 
+// 4. Bollinger Bands
 function calcBB(candles, period = 20) {
   const p = Math.min(period, candles.length);
   const closes = candles.slice(-p).map(c => c.close);
@@ -339,52 +378,47 @@ function calcBB(candles, period = 20) {
   return { upper: sma + 2*std, lower: sma - 2*std, mid: sma };
 }
 
-function calcATR(candles, period = 14) {
-  const trs = [];
-  for (let i = 1; i < candles.length; i++) {
-    trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
+// 5. Supertrend
+function calcSupertrend(candles, period = 10, multiplier = 3) {
+  const atr = calcATR(candles, period);
+  const last = candles[candles.length - 1];
+  const hl2 = (last.high + last.low) / 2;
+  const upperBand = hl2 + multiplier * atr;
+  const lowerBand = hl2 - multiplier * atr;
+  let dir = 'NEUTRAL';
+  if (last.close > upperBand) dir = 'DOWN';
+  else if (last.close < lowerBand) dir = 'UP';
+  else dir = last.close > hl2 ? 'UP' : 'DOWN';
+  return { dir, upperBand, lowerBand };
+}
+
+// 6. VWAP
+function calcVWAP(candles) {
+  let cumPV = 0, cumVol = 0;
+  const recent = candles.slice(-30);
+  for (const c of recent) {
+    const typical = (c.high + c.low + c.close) / 3;
+    const vol = c.volume || 1;
+    cumPV += typical * vol;
+    cumVol += vol;
   }
-  return trs.slice(-period).reduce((a,b) => a+b, 0) / period;
+  const vwap = cumVol > 0 ? cumPV / cumVol : recent[recent.length - 1].close;
+  const last = recent[recent.length - 1].close;
+  return { vwap, dir: last > vwap ? 'UP' : 'DOWN', dist: Math.abs(last - vwap) / last * 100 };
 }
 
-function calcCCI(candles, period = 20) {
-  const p = Math.min(period, candles.length);
-  const slice = candles.slice(-p);
-  const typicals = slice.map(c => (c.high + c.low + c.close) / 3);
-  const mean = typicals.reduce((a,b) => a+b, 0) / p;
-  const mad = typicals.reduce((s,t) => s + Math.abs(t - mean), 0) / p;
-  if (mad === 0) return 0;
-  return (typicals[typicals.length - 1] - mean) / (0.015 * mad);
-}
-
-function calcWilliamsR(candles, period = 14) {
-  const p = Math.min(period, candles.length);
-  const slice = candles.slice(-p);
-  const highest = Math.max(...slice.map(c => c.high));
-  const lowest = Math.min(...slice.map(c => c.low));
+// 7. Support & Resistance
+function calcSupportResistance(candles) {
+  const highs = candles.map(c => c.high), lows = candles.map(c => c.low);
+  const resistance = Math.max(...highs.slice(-20));
+  const support = Math.min(...lows.slice(-20));
   const last = candles[candles.length - 1].close;
-  if (highest === lowest) return -50;
-  return ((highest - last) / (highest - lowest)) * -100;
+  const nearResistance = Math.abs(last - resistance) / last < 0.001;
+  const nearSupport = Math.abs(last - support) / last < 0.001;
+  return { support, resistance, nearSupport, nearResistance };
 }
 
-function calcTrend(candles) {
-  const ema5 = calcEMA(candles, 5), ema10 = calcEMA(candles, 10), ema20 = calcEMA(candles, 20), ema50 = calcEMA(candles, 50);
-  const last = candles[candles.length - 1].close;
-  let up = 0, dn = 0;
-  if (ema5 > ema20) up += 2; else dn += 2;
-  if (ema10 > ema50) up += 2; else dn += 2;
-  if (last > ema5) up += 1; else dn += 1;
-  if (last > ema20) up += 1; else dn += 1;
-  if (ema5 > ema10 && ema10 > ema20) up += 3;
-  else if (ema5 < ema10 && ema10 < ema20) dn += 3;
-  return {
-    dir: up > dn ? 'UP' : 'DOWN',
-    up, dn,
-    isStrong: up >= 5 || dn >= 5,
-    label: up > dn ? 'Strong Uptrend 📈' : 'Strong Downtrend 📉'
-  };
-}
-
+// 8. Candle Patterns
 function calcCandlePattern(candles) {
   const len = candles.length;
   if (len < 3) return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
@@ -409,134 +443,275 @@ function calcCandlePattern(candles) {
   return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
 }
 
-function calcSupportResistance(candles) {
-  const highs = candles.map(c => c.high), lows = candles.map(c => c.low);
-  const resistance = Math.max(...highs.slice(-20));
-  const support = Math.min(...lows.slice(-20));
-  const last = candles[candles.length - 1].close;
-  const nearResistance = Math.abs(last - resistance) / last < 0.001;
-  const nearSupport = Math.abs(last - support) / last < 0.001;
-  return { support, resistance, nearSupport, nearResistance };
-}
-
-// ✅ NEW — ADX (ট্রেন্ড স্ট্রেংথ)
-function calcADX(candles, period = 14) {
-  if (candles.length < period + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
-  let plusDM = [], minusDM = [], tr = [];
+// 9. ATR
+function calcATR(candles, period = 14) {
+  const trs = [];
   for (let i = 1; i < candles.length; i++) {
-    const upMove = candles[i].high - candles[i-1].high;
-    const downMove = candles[i-1].low - candles[i].low;
-    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
-    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
-    tr.push(Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i-1].close),
-      Math.abs(candles[i].low - candles[i-1].close)
-    ));
+    trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
   }
-  const sum = arr => arr.slice(-period).reduce((a,b) => a+b, 0);
-  const trSum = sum(tr) || 1;
-  const plusDI = 100 * (sum(plusDM) / trSum);
-  const minusDI = 100 * (sum(minusDM) / trSum);
-  const adx = 100 * Math.abs(plusDI - minusDI) / ((plusDI + minusDI) || 1);
-  return { adx, plusDI, minusDI };
+  return trs.slice(-period).reduce((a,b) => a+b, 0) / period;
 }
 
-// ✅ NEW — Supertrend
-function calcSupertrend(candles, period = 10, multiplier = 3) {
-  const atr = calcATR(candles, period);
-  const last = candles[candles.length - 1];
-  const hl2 = (last.high + last.low) / 2;
-  const upperBand = hl2 + multiplier * atr;
-  const lowerBand = hl2 - multiplier * atr;
-  let dir = 'NEUTRAL';
-  if (last.close > upperBand) dir = 'DOWN';
-  else if (last.close < lowerBand) dir = 'UP';
-  else dir = last.close > hl2 ? 'UP' : 'DOWN';
-  return { dir, upperBand, lowerBand };
+// 10. EMA (20, 50)
+function calcEMA(candles, period) {
+  if (candles.length < 2) return candles[0].close;
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
+  return ema;
 }
 
-// ✅ NEW — VWAP (Volume Weighted Average Price)
-function calcVWAP(candles) {
-  let cumPV = 0, cumVol = 0;
-  const recent = candles.slice(-30);
-  for (const c of recent) {
-    const typical = (c.high + c.low + c.close) / 3;
-    const vol = c.volume || 1;
-    cumPV += typical * vol;
-    cumVol += vol;
+function calcTrend(candles) {
+  const ema20 = calcEMA(candles, 20), ema50 = calcEMA(candles, 50);
+  const last = candles[candles.length - 1].close;
+  let up = 0, dn = 0;
+  if (ema20 > ema50) up += 2; else dn += 2;
+  if (last > ema20) up += 1; else dn += 1;
+  if (last > ema50) up += 1; else dn += 1;
+  return {
+    dir: up > dn ? 'UP' : 'DOWN',
+    up, dn,
+    isStrong: up >= 3 || dn >= 3,
+    label: up > dn ? 'Uptrend 📈' : 'Downtrend 📉'
+  };
+}
+
+// ━━━ NEW HIGH ACCURACY INDICATORS ━━━
+
+// 11. Ichimoku Cloud
+function calcIchimoku(candles) {
+  const len = candles.length;
+  if (len < 52) return { senkouA: 0, senkouB: 0, tenkan: 0, kijun: 0, chikou: 0, trend: 'NEUTRAL' };
+  
+  // Tenkan-sen (Conversion Line): (9-period high + low) / 2
+  const high9 = Math.max(...candles.slice(-9).map(c => c.high));
+  const low9 = Math.min(...candles.slice(-9).map(c => c.low));
+  const tenkan = (high9 + low9) / 2;
+  
+  // Kijun-sen (Base Line): (26-period high + low) / 2
+  const high26 = Math.max(...candles.slice(-26).map(c => c.high));
+  const low26 = Math.min(...candles.slice(-26).map(c => c.low));
+  const kijun = (high26 + low26) / 2;
+  
+  // Senkou Span A: (Tenkan + Kijun) / 2 (26 periods ahead)
+  const senkouA = (tenkan + kijun) / 2;
+  
+  // Senkou Span B: (52-period high + low) / 2 (26 periods ahead)
+  const high52 = Math.max(...candles.slice(-52).map(c => c.high));
+  const low52 = Math.min(...candles.slice(-52).map(c => c.low));
+  const senkouB = (high52 + low52) / 2;
+  
+  // Chikou Span: Close price shifted 26 periods back
+  const chikou = candles.length >= 26 ? candles[candles.length - 26].close : candles[0].close;
+  
+  // Current price
+  const last = candles[candles.length - 1].close;
+  
+  // Trend determination
+  let trend = 'NEUTRAL';
+  let up = 0, dn = 0;
+  
+  // Price above/below cloud
+  if (last > senkouA && last > senkouB) { up += 3; trend = 'UP'; }
+  else if (last < senkouA && last < senkouB) { dn += 3; trend = 'DOWN'; }
+  
+  // Tenkan above Kijun = bullish
+  if (tenkan > kijun) up += 2;
+  else dn += 2;
+  
+  // Chikou above price = bullish
+  if (chikou > last) up += 2;
+  else dn += 2;
+  
+  return { 
+    tenkan, kijun, senkouA, senkouB, chikou, 
+    trend: up > dn ? 'UP' : 'DOWN',
+    up, dn,
+    isStrong: up >= 5 || dn >= 5,
+    label: up > dn ? 'Ichimoku Bullish ☀️' : 'Ichimoku Bearish 🌧️'
+  };
+}
+
+// 12. MFI (Money Flow Index) - RSI + Volume
+function calcMFI(candles, period = 14) {
+  if (candles.length < period + 1) return 50;
+  let positiveFlow = 0, negativeFlow = 0;
+  
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const typical = (candles[i].high + candles[i].low + candles[i].close) / 3;
+    const vol = candles[i].volume || 1;
+    const moneyFlow = typical * vol;
+    
+    if (i > 0) {
+      const prevTypical = (candles[i-1].high + candles[i-1].low + candles[i-1].close) / 3;
+      if (typical > prevTypical) positiveFlow += moneyFlow;
+      else if (typical < prevTypical) negativeFlow += moneyFlow;
+    }
   }
-  const vwap = cumVol > 0 ? cumPV / cumVol : recent[recent.length - 1].close;
-  const last = recent[recent.length - 1].close;
-  return { vwap, dir: last > vwap ? 'UP' : 'DOWN', dist: Math.abs(last - vwap) / last * 100 };
+  
+  const mfi = 100 - (100 / (1 + (positiveFlow / (negativeFlow || 1))));
+  return mfi;
+}
+
+// 13. Fibonacci Retracement
+function calcFibonacci(candles) {
+  const len = Math.min(50, candles.length);
+  const slice = candles.slice(-len);
+  const high = Math.max(...slice.map(c => c.high));
+  const low = Math.min(...slice.map(c => c.low));
+  const last = candles[candles.length - 1].close;
+  
+  const diff = high - low;
+  const levels = {
+    level0: high,
+    level236: high - diff * 0.236,
+    level382: high - diff * 0.382,
+    level500: high - diff * 0.5,
+    level618: high - diff * 0.618,
+    level786: high - diff * 0.786,
+    level100: low
+  };
+  
+  // Check which level price is near
+  let nearLevel = null;
+  let nearDist = Infinity;
+  for (const [key, value] of Object.entries(levels)) {
+    const dist = Math.abs(last - value) / last;
+    if (dist < 0.001 && dist < nearDist) {
+      nearDist = dist;
+      nearLevel = key;
+    }
+  }
+  
+  // 61.8% is the most important level
+  const near618 = Math.abs(last - levels.level618) / last < 0.001;
+  const above618 = last > levels.level618;
+  
+  return { 
+    ...levels, 
+    nearLevel, 
+    near618,
+    above618,
+    dir: above618 ? 'UP' : 'DOWN'
+  };
+}
+
+// 14. Chaikin Money Flow
+function calcChaikinMF(candles, period = 21) {
+  if (candles.length < period) return 0;
+  let sumMF = 0;
+  
+  for (let i = candles.length - period; i < candles.length; i++) {
+    const c = candles[i];
+    const mf = ((c.close - c.low) - (c.high - c.close)) / (c.high - c.low) * (c.volume || 1);
+    sumMF += mf;
+  }
+  
+  const totalVol = candles.slice(-period).reduce((s, c) => s + (c.volume || 1), 0);
+  return totalVol > 0 ? sumMF / totalVol : 0;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 FULL ANALYSIS
+// 🔍 FULL ANALYSIS (14 High Accuracy Indicators)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function analyzeSymbol(symbol, relaxed = false) {
-  const candles = await getCandles(symbol, 50);
+  const candles = await getCandles(symbol, 52);
   const h4Candles = await getCandles(symbol, 100, '5min');
 
-  const rsi = calcRSI(candles), rsi7 = calcRSI(candles, 7);
-  const stoch = calcStochRSI(candles), macd = calcMACD(candles);
-  const bb = calcBB(candles), atr = calcATR(candles);
-  const cci = calcCCI(candles), wr = calcWilliamsR(candles);
-  const trend = calcTrend(candles), h4Trend = calcTrend(h4Candles);
-  const cp = calcCandlePattern(candles), sr = calcSupportResistance(candles);
+  // ━━ Calculate all 14 indicators ━━
+  const rsi = calcRSI(candles);
+  const macd = calcMACD(candles);
   const adx = calcADX(candles);
+  const bb = calcBB(candles);
   const supertrend = calcSupertrend(candles);
   const vwap = calcVWAP(candles);
+  const sr = calcSupportResistance(candles);
+  const cp = calcCandlePattern(candles);
+  const atr = calcATR(candles);
+  const trend = calcTrend(candles);
+  const ichimoku = calcIchimoku(candles);
+  const mfi = calcMFI(candles);
+  const fib = calcFibonacci(candles);
+  const cmf = calcChaikinMF(candles);
+  
   const last = candles[candles.length - 1].close;
-
   let up = 0, dn = 0;
   const signals = [];
 
-  if (rsi < 30) { up += 3; signals.push('RSI Oversold'); } else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
+  // ━━ 1. RSI ━━
+  if (rsi < 30) { up += 3; signals.push('RSI Oversold'); } 
+  else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
   else if (rsi < 45) up += 1; else if (rsi > 55) dn += 1;
 
-  if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); } else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
+  // ━━ 2. MACD ━━
+  if (macd > 0) { up += 3; signals.push('MACD Bullish'); } 
+  else { dn += 3; signals.push('MACD Bearish'); }
 
-  if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); } else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
-
-  if (macd > 0) { up += 2; signals.push('MACD Bullish'); } else { dn += 2; signals.push('MACD Bearish'); }
-
-  if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); } else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
-
-  if (cci < -100) { up += 2; signals.push('CCI Oversold'); } else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
-
-  if (wr < -80) { up += 2; signals.push('Williams %R Oversold'); } else if (wr > -20) { dn += 2; signals.push('Williams %R Overbought'); }
-
-  up += trend.up; dn += trend.dn;
-  if (trend.dir === 'UP') signals.push('EMA Bullish Alignment'); else signals.push('EMA Bearish Alignment');
-
-  if (trend.dir === h4Trend.dir) { up += 2; signals.push('HTF Confirmation ✅'); } else { dn += 2; signals.push('HTF Mismatch ⚠️'); }
-
-  if (sr.nearSupport) { up += 3; signals.push('At Support Level ✅'); }
-  if (sr.nearResistance) { dn += 3; signals.push('At Resistance Level ⚠️'); }
-
-  if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); } else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
-
-  // ✅ নতুন পাওয়ারফুল ইন্ডিকেটর — ADX, Supertrend, VWAP
+  // ━━ 3. ADX ━━
   if (adx.adx >= 25) {
     if (adx.plusDI > adx.minusDI) { up += 3; signals.push(`ADX Strong (${adx.adx.toFixed(0)}) ✅`); }
     else { dn += 3; signals.push(`ADX Strong (${adx.adx.toFixed(0)}) ✅`); }
   }
 
+  // ━━ 4. Bollinger Bands ━━
+  if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); } 
+  else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
+
+  // ━━ 5. Supertrend ━━
   if (supertrend.dir === 'UP') { up += 3; signals.push('Supertrend Bullish 🚀'); }
   else if (supertrend.dir === 'DOWN') { dn += 3; signals.push('Supertrend Bearish 🔻'); }
 
+  // ━━ 6. VWAP ━━
   if (vwap.dir === 'UP') { up += 2; signals.push('Above VWAP 📈'); }
   else { dn += 2; signals.push('Below VWAP 📉'); }
 
+  // ━━ 7. Support/Resistance ━━
+  if (sr.nearSupport) { up += 3; signals.push('At Support Level ✅'); }
+  if (sr.nearResistance) { dn += 3; signals.push('At Resistance Level ⚠️'); }
+
+  // ━━ 8. Candle Patterns ━━
+  if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); } 
+  else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
+
+  // ━━ 9. ATR (volatility check) ━━
+  const volatility = (atr / last) * 100;
+
+  // ━━ 10. EMA Trend ━━
+  up += trend.up; dn += trend.dn;
+  if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
+  else signals.push('EMA Bearish Alignment');
+
+  // ━━ 11. Ichimoku Cloud ━━ (NEW)
+  up += ichimoku.up; dn += ichimoku.dn;
+  if (ichimoku.trend === 'UP') signals.push(ichimoku.label);
+  else if (ichimoku.trend === 'DOWN') signals.push(ichimoku.label);
+
+  // ━━ 12. MFI ━━ (NEW)
+  if (mfi < 20) { up += 3; signals.push(`MFI Oversold (${mfi.toFixed(0)})`); }
+  else if (mfi > 80) { dn += 3; signals.push(`MFI Overbought (${mfi.toFixed(0)})`); }
+
+  // ━━ 13. Fibonacci ━━ (NEW)
+  if (fib.near618) {
+    if (fib.above618) { up += 3; signals.push('Fib 61.8% Support ✅'); }
+    else { dn += 3; signals.push('Fib 61.8% Resistance ⚠️'); }
+  }
+  if (fib.nearLevel && fib.nearLevel !== 'level618') {
+    signals.push(`Near Fib ${fib.nearLevel.replace('level', '')}%`);
+  }
+
+  // ━━ 14. Chaikin Money Flow ━━ (NEW)
+  if (cmf > 0.1) { up += 2; signals.push('CMF Bullish 🟢'); }
+  else if (cmf < -0.1) { dn += 2; signals.push('CMF Bearish 🔴'); }
+
+  // ━━ Final Score ━━
   const total = up + dn;
   const dominant = Math.max(up, dn);
   const ratio = total > 0 ? dominant / total : 0;
   const direction = up >= dn ? 'UP' : 'DOWN';
-  const volatility = (atr / last) * 100;
   const aiScore = Math.round(ratio * 100);
 
+  // ━━ Confidence ━━
   let confidence = '';
   if (aiScore >= 90) confidence = 'Extreme High 🔥🔥';
   else if (aiScore >= 85) confidence = 'Very High 🔥';
@@ -544,48 +719,58 @@ async function analyzeSymbol(symbol, relaxed = false) {
   else if (aiScore >= 75) confidence = 'Medium ⚡';
   else confidence = 'Low ⚠️';
 
-  // ✅ কনফ্লুয়েন্স চেক — মূল ইন্ডিকেটরগুলো একমত কিনা তা গণনা করা
+  // ━━ Agreement Check ━━
   const directionsAgree = [
     trend.dir,
-    adx.adx >= 25 ? (adx.plusDI > adx.minusDI ? 'UP' : 'DOWN') : direction,
+    ichimoku.trend,
     supertrend.dir === 'NEUTRAL' ? direction : supertrend.dir,
-    vwap.dir
+    vwap.dir,
+    adx.adx >= 25 ? (adx.plusDI > adx.minusDI ? 'UP' : 'DOWN') : direction,
+    cmf > 0 ? 'UP' : 'DOWN',
+    fib.above618 ? 'UP' : 'DOWN'
   ].filter(d => d === direction).length;
 
+  // ━━ Validity ━━
   const isValid = relaxed
     ? (ratio >= 0.65 && aiScore >= 65 && volatility >= 0.002)
-    : (ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80 && adx.adx >= 22 && directionsAgree >= 3);
+    : (ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80 && adx.adx >= 22 && directionsAgree >= 4);
 
   return {
-    symbol, direction, ratio, aiScore, trend, h4Trend: h4Trend.dir,
-    signals: signals.slice(0, 6), currentPrice: last, volatility, confidence,
-    isSureShot: aiScore >= 90 && directionsAgree >= 4, isValid, sr, candles,
-    adx: adx.adx, directionsAgree
+    symbol, direction, ratio, aiScore, trend: trend.dir,
+    signals: signals.slice(0, 8),
+    currentPrice: last, volatility, confidence,
+    isSureShot: aiScore >= 90 && directionsAgree >= 5,
+    isValid, sr, candles,
+    adx: adx.adx, directionsAgree,
+    // New indicator data for logging
+    ichimoku: ichimoku.trend,
+    mfi: mfi,
+    fib: fib.nearLevel,
+    cmf: cmf
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CHART GENERATOR (Line chart with Entry/Exit via QuickChart)
+// 📊 CANDLE CHART GENERATOR
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function generateChart(symbol, candles, direction, entryPrice, exitPrice) {
+async function generateCandleChart(symbol, candles, direction, entryPrice, exitPrice, isMTG = false) {
   try {
-    const plotCandles = candles.slice(-30);
-    const labels = plotCandles.map((_, i) => `${i + 1}`);
-    const closes = plotCandles.map(c => c.close);
-
+    const plotCandles = candles.slice(-20);
+    const ohlcData = plotCandles.map(c => [c.open, c.high, c.low, c.close]);
+    
     const chartConfig = {
-      type: 'line',
+      type: 'candlestick',
       data: {
-        labels: labels,
+        labels: plotCandles.map((_, i) => `${i+1}`),
         datasets: [{
-          label: symbol,
-          data: closes,
-          borderColor: direction === 'UP' ? '#00ff88' : '#ff4444',
-          backgroundColor: direction === 'UP' ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)',
-          fill: true,
-          tension: 0.2,
-          pointRadius: 0
+          label: `${symbol} Candlestick`,
+          data: ohlcData,
+          color: {
+            up: '#00ff88',
+            down: '#ff4444',
+            unchanged: '#999999'
+          }
         }]
       },
       options: {
@@ -600,7 +785,13 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
                 borderColor: 'rgba(255,215,0,0.9)',
                 borderWidth: 2,
                 borderDash: [6, 4],
-                label: { content: 'ENTRY', enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.8)', color: '#000' }
+                label: { 
+                  content: isMTG ? 'MTG ENTRY' : 'ENTRY', 
+                  enabled: true, 
+                  position: 'start', 
+                  backgroundColor: 'rgba(255,215,0,0.8)', 
+                  color: '#000' 
+                }
               },
               exitLine: {
                 type: 'line',
@@ -610,7 +801,7 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
                 borderWidth: 2,
                 borderDash: [6, 4],
                 label: {
-                  content: exitPrice > entryPrice ? 'WIN' : 'LOSS',
+                  content: exitPrice > entryPrice ? (isMTG ? 'MTG WIN' : 'WIN') : (isMTG ? 'MTG LOSS' : 'LOSS'),
                   enabled: true,
                   position: 'end',
                   backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)',
@@ -621,8 +812,14 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
           }
         },
         scales: {
-          x: { ticks: { color: '#aaa' } },
-          y: { ticks: { color: '#aaa' } }
+          x: { 
+            ticks: { color: '#aaa' },
+            grid: { color: 'rgba(255,255,255,0.05)' }
+          },
+          y: { 
+            ticks: { color: '#aaa' },
+            grid: { color: 'rgba(255,255,255,0.05)' }
+          }
         }
       }
     };
@@ -642,13 +839,13 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
     const imageBuffer = await response.buffer();
     return imageBuffer;
   } catch (error) {
-    console.error('❌ Chart generation failed:', error.message);
+    console.error('❌ Candle chart generation failed:', error.message);
     return null;
   }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 BEST PAIR FINDER (with ignoreTime + relaxed mode)
+// 🔍 BEST PAIR FINDER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function findBestPair(ignoreTime = false, relaxed = false) {
@@ -674,7 +871,7 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
       const result = await analyzeSymbol(pair.symbol, relaxed);
       result.flag = pair.flag;
       result.priority = pair.priority;
-      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/4 | Vol=${(result.volatility*100).toFixed(2)}%`);
+      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/7 | Vol=${(result.volatility*100).toFixed(2)}%`);
 
       if (!result.isValid) { await sleep(800); continue; }
 
@@ -698,13 +895,16 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
 // ⏰ CANDLE TIMING
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function waitForSignalTiming() {
+function waitForExactSecond(targetSecond) {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 40 && s <= 43) { clearInterval(check); resolve(); }
-    }, 500);
+      if (s === targetSecond) {
+        clearInterval(check);
+        resolve();
+      }
+    }, 100);
     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
 }
@@ -714,160 +914,276 @@ function waitForCandleClose() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 58) { clearInterval(check); resolve(); }
+      if (s >= 58) {
+        clearInterval(check);
+        resolve();
+      }
+    }, 500);
+    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
+  });
+}
+
+function waitForNewCandle() {
+  return new Promise(resolve => {
+    const check = setInterval(() => {
+      const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      const s = now.getUTCSeconds();
+      if (s === 0 || s === 1) {
+        clearInterval(check);
+        resolve();
+      }
     }, 500);
     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER (with Chart)
+// 🎯 PRO SIGNAL SENDER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function sendProSignal(bot, signal) {
+async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = null, exitPriceOverride = null) {
   const signalKey = generateSignalKey(signal.symbol, signal.direction);
-  if (sentSignals.has(signalKey)) {
+  if (sentSignals.has(signalKey) && !isMTG) {
     console.log(`⚠️ Duplicate signal: ${signalKey}`);
     return null;
   }
-  sentSignals.set(signalKey, Date.now());
+  if (!isMTG) sentSignals.set(signalKey, Date.now());
 
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : '';
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
-  const directionEmoji = signal.direction === 'UP' ? '🟢' : '🔴';
 
   try {
-    // ━━━ 1. Pro Signal Message ━━━
+    // ━━━ Signal Message ━━━
     await safeSendMessage(bot,
-      `╔══════════════════════════════╗\n` +
-      `     🤖 QX AI LIVE V6.0\n` +
-      `     ${Math.floor(Math.random() * 1000 + 100)} monthly users\n` +
-      `╚══════════════════════════════╝\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `📊 **ASSET**       ➜ ${signal.symbol} ${flag}\n` +
-      `🎯 **DIRECTION**   ➜ ${dirLabel} ${directionEmoji}\n` +
-      `📈 **CONFIDENCE**  ➜ ${signal.aiScore}%\n` +
-      `📉 **TREND**       ➜ ${signal.trend.label}\n` +
-      `⏰ **ENTRY**       ➜ ${getBDTime().display} (BD Time)\n` +
-      `⏳ **EXPIRY**      ➜ 1 Minute\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-      `📌 **ANALYSIS**\n` +
-      signal.signals.map((s, i) => `  ${i+1}. ${s}`).join('\n') + '\n\n' +
-      `🛡️ **RISK MANAGEMENT**\n` +
-      `  • Maximum 1 Step MTG\n` +
-      `  • Never Overtrade\n\n` +
-      `💎 **OWNER**: @AkiL_xD 👾\n` +
+      `╔════════════════════╗\n` +
+      `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
+      `╚════════════════════╝\n\n` +
+      `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🎯 𝗤𝘅 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘   ➜ ${signal.aiScore}%\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
+      `• Maximum 1 Step MTG\n` +
+      `• Never Overtrade\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
       `⚠️ Trade at your own risk.`,
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ 2. Chart (Entry) ━━━
-    const chartBuffer = await generateChart(
-      signal.symbol,
-      signal.candles,
-      signal.direction,
-      signal.currentPrice,
-      signal.currentPrice * (signal.direction === 'UP' ? 1.001 : 0.999) // dummy exit
-    );
-    if (chartBuffer) {
-      await safeSendPhoto(bot, chartBuffer, `📊 ${signal.symbol} | Direction: ${signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴'}`);
-    }
+    // ━━━ Wait for 45 second ━━━
+    console.log(`⏳ Waiting for signal timing (45s)...`);
+    await waitForExactSecond(45);
+    
+    const bdTime = getBDTime();
+    console.log(`📡 Signal timing! Entry at: ${bdTime.fullTime}`);
 
-    // ━━━ 3. Wait for timing ━━━
-    console.log(`⏳ Waiting for candle timing...`);
-    await waitForSignalTiming();
-
-    const nowBD = new Date(Date.now() + 6 * 60 * 60 * 1000);
-    const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
-    const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
-    const entryTime = `${String(nextH % 24).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
-    console.log(`📡 Signal timing! Entry: ${entryTime}`);
-
-    // ━━━ 4. Direction Sticker ━━━
-    const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
+    // ━━━ Direction Sticker ━━━
+    const dirSticker = isMTG ? (signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN) : (signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT);
     await safeSendSticker(bot, dirSticker);
-    console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
+    console.log(`✅ ${signal.symbol} ${dirLabel}${isMTG ? ' (MTG)' : ''}`);
 
-    let entryPrice = signal.currentPrice;
-    try { entryPrice = await getCurrentPrice(signal.symbol); } catch(e) {}
+    // ━━━ Entry Price (59 second) ━━━
+    await waitForExactSecond(59);
+    let entryPrice = entryPriceOverride || signal.currentPrice;
+    try {
+      const priceData = await getCurrentPrice(signal.symbol);
+      if (priceData) entryPrice = priceData;
+    } catch(e) {}
+    console.log(`💰 Entry Price: ${entryPrice}`);
 
-    // ━━━ 5. Live Price Update ━━━
+    // ━━━ Live Price Update ━━━
     await safeSendMessage(bot,
       `💹 **LIVE PRICE UPDATE**\n\n` +
       `📊 ${signal.symbol}\n` +
-      `💰 Current: ${entryPrice.toFixed(5)}\n` +
+      `💰 Entry: ${entryPrice.toFixed(5)}\n` +
       `📈 High: ${(entryPrice * 1.002).toFixed(5)}\n` +
       `📉 Low: ${(entryPrice * 0.998).toFixed(5)}\n` +
       `⚡ Volatility: ${(signal.volatility * 100).toFixed(2)}%\n\n` +
-      `⏰ Entry: ${entryTime}`,
+      `⏰ Entry Time: ${getBDTime().fullTime}`,
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ 6. Wait for candle close ━━━
+    // ━━━ Wait for candle close ━━━
     console.log(`⏳ Waiting for candle close...`);
     await waitForCandleClose();
     await sleep(1500);
 
-    // ━━━ 7. Exit Price ━━━
-    let exitPrice = entryPrice;
-    try { exitPrice = await getCurrentPrice(signal.symbol); } catch(e) {}
+    // ━━━ Exit Price ━━━
+    let exitPrice = exitPriceOverride || entryPrice;
+    try {
+      const priceData = await getCurrentPrice(signal.symbol);
+      if (priceData) exitPrice = priceData;
+    } catch(e) {}
+    console.log(`💰 Exit Price: ${exitPrice}`);
 
-    // ━━━ 8. Result ━━━
+    // ━━━ Result ━━━
     const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
-    console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+    console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
 
-    lastResults.push(isWin);
-    if (lastResults.length > 10) lastResults.shift();
-    tracker.addResult(signal.symbol, signal.direction, isWin);
+    if (!isMTG) {
+      lastResults.push(isWin);
+      if (lastResults.length > 10) lastResults.shift();
+    }
+    tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
-    // ━━━ 9. Result Chart ━━━
-    const resultChart = await generateChart(signal.symbol, signal.candles, signal.direction, entryPrice, exitPrice);
-    if (resultChart) {
-      await safeSendPhoto(bot, resultChart, `📊 Result: ${isWin ? '✅ WIN' : '❌ LOSS'} | ${signal.symbol}`);
+    // ━━━ Candle Chart ━━━
+    const chartBuffer = await generateCandleChart(signal.symbol, signal.candles, signal.direction, entryPrice, exitPrice, isMTG);
+    if (chartBuffer) {
+      const chartCaption = isMTG ? `📊 MTG ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}` : `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}`;
+      await safeSendPhoto(bot, chartBuffer, chartCaption);
     }
 
-    // ━━━ 10. Result Message ━━━
+    // ━━━ Result Message ━━━
+    const todayStats = tracker.getTodayStats();
+    
     if (isWin) {
-      await safeSendSticker(bot, STICKERS.SURESHOT);
-      await sleep(600);
+      if (!isMTG) {
+        await safeSendSticker(bot, STICKERS.SURESHOT);
+        await sleep(600);
+      }
       await safeSendMessage(bot,
-        `✅ **SIGNAL RESULT : WIN**\n\n` +
+        `✅ **SIGNAL RESULT : WIN${isMTG ? ' (MTG)' : ''}**\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
         `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
         `🎯 **Direction**: ${dirLabel}\n` +
         `📈 **Result**   : WIN ✅\n` +
         `💰 **Profit**   : +${((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)}%\n` +
         `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🎯 **SURESHOT** ✅\n\n` +
-        `📊 **Today Stats**: ${tracker.getTodayStats().wins}W / ${tracker.getTodayStats().losses}L\n\n` +
+        `${isMTG ? '🔄 **MTG Recovery Successful!** ✅\n\n' : '🎯 **SURESHOT** ✅\n\n'}` +
+        `📊 **Today Stats**: ${todayStats.wins}W / ${todayStats.losses}L (MTG: ${todayStats.mtgWins}W / ${todayStats.mtgLosses}L)\n\n` +
         `💎 **OWNER**: @AkiL_xD 👾`,
         { parse_mode: 'Markdown' }
       );
     } else {
-      const mtgSticker = signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN;
-      await safeSendSticker(bot, mtgSticker);
-      await sleep(600);
       await safeSendMessage(bot,
-        `❌ **SIGNAL RESULT : LOSS**\n\n` +
+        `❌ **SIGNAL RESULT : LOSS${isMTG ? ' (MTG)' : ''}**\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
         `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
         `🎯 **Direction**: ${dirLabel}\n` +
         `📈 **Result**   : LOSS ❌\n` +
         `📉 **Loss**     : ${((entryPrice - exitPrice) / entryPrice * 100).toFixed(2)}%\n` +
         `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `💪 **Wait for recovery signal**\n\n` +
-        `📊 **Today Stats**: ${tracker.getTodayStats().wins}W / ${tracker.getTodayStats().losses}L\n\n` +
+        `${isMTG ? '🔄 **MTG Recovery Failed!** ❌\n' : '💪 **MTG Recovery Mode Activated!**\n'}` +
+        `📊 **Today Stats**: ${todayStats.wins}W / ${todayStats.losses}L (MTG: ${todayStats.mtgWins}W / ${todayStats.mtgLosses}L)\n\n` +
         `💎 **OWNER**: @AkiL_xD 👾`,
         { parse_mode: 'Markdown' }
       );
+      
+      if (!isMTG) {
+        await handleMTGRecovery(bot, signal);
+      }
     }
 
-    return isWin;
+    return { isWin, entryPrice, exitPrice };
 
   } catch (error) {
     console.error(`❌ Signal error for ${signal.symbol}: ${error.message}`);
     return null;
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔄 MTG RECOVERY SYSTEM
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function handleMTGRecovery(bot, originalSignal) {
+  if (isRecoveryMode) {
+    console.log('⚠️ Recovery already in progress');
+    return;
+  }
+  
+  isRecoveryMode = true;
+  recoveryAttempts = 0;
+  
+  const pairInfo = SESSION_PAIRS.find(p => p.symbol === originalSignal.symbol);
+  const flag = pairInfo ? pairInfo.flag : '';
+  
+  try {
+    await safeSendMessage(bot,
+      `🔄 **𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟**\n\n` +
+      `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
+      `⏳ **Coming in 3–5 Minutes**\n` +
+      `✅ **Wait for Confirmation**\n\n` +
+      `⚠️ **দয়া করে অফিসিয়াল সিগন্যাল না পাওয়া পর্যন্ত কোনো এন্ট্রি নেবেন না।**\n\n` +
+      `📈 **সবাই প্রস্তুত থাকুন!**`,
+      { parse_mode: 'Markdown' }
+    );
+    
+    await sleep(3000);
+    
+    const startTime = Date.now();
+    const maxWaitTime = 5 * 60 * 1000;
+    let foundSignal = false;
+    
+    while (Date.now() - startTime < maxWaitTime && recoveryAttempts < MAX_RECOVERY_ATTEMPTS && !foundSignal) {
+      await waitForNewCandle();
+      await sleep(2000);
+      
+      recoveryAttempts++;
+      console.log(`🔍 MTG Analysis Attempt ${recoveryAttempts}/${MAX_RECOVERY_ATTEMPTS}`);
+      
+      try {
+        const analysis = await analyzeSymbol(originalSignal.symbol, true);
+        
+        const isSameDirection = analysis.direction === originalSignal.direction;
+        const hasGoodConfidence = analysis.aiScore >= 82 && analysis.isValid && analysis.directionsAgree >= 4;
+        
+        console.log(`📊 MTG Analysis: ${analysis.symbol} | Dir: ${analysis.direction} | Score: ${analysis.aiScore}% | Valid: ${analysis.isValid} | Agree: ${analysis.directionsAgree}/7`);
+        
+        if (isSameDirection && hasGoodConfidence) {
+          console.log(`✅ Found good MTG signal at candle ${recoveryAttempts}`);
+          foundSignal = true;
+          
+          await safeSendMessage(bot,
+            `🔄 **𝗠𝗧𝗚 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟**\n\n` +
+            `📊 **Asset:** ${analysis.symbol} ${flag}\n` +
+            `🎯 **Direction:** ${analysis.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴'}\n` +
+            `📈 **Confidence:** ${analysis.aiScore}%\n` +
+            `⏰ **Entry Time:** ${getBDTime().fullTime}\n\n` +
+            `✅ **MTG Signal Confirmed! Entry Now!**`,
+            { parse_mode: 'Markdown' }
+          );
+          
+          const mtgResult = await sendProSignal(bot, analysis, true);
+          
+          if (mtgResult && mtgResult.isWin) {
+            console.log('✅ MTG Recovery Successful!');
+          } else {
+            console.log('❌ MTG Recovery Failed');
+          }
+          
+          break;
+        } else {
+          console.log(`⏳ MTG signal not ready yet (attempt ${recoveryAttempts})`);
+        }
+        
+      } catch (error) {
+        console.error(`❌ MTG analysis error: ${error.message}`);
+      }
+      
+      if (!foundSignal) {
+        await sleep(30 * 1000);
+      }
+    }
+    
+    if (!foundSignal) {
+      console.log('⏭️ MTG Recovery: No good signal found within time limit');
+      await safeSendMessage(bot,
+        `⏭️ **𝗠𝗧𝗚 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗞𝗜𝗣𝗣𝗘𝗗**\n\n` +
+        `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
+        `⏳ **No good recovery signal found in 5 minutes**\n\n` +
+        `🛡️ **Wait for next session for fresh signals.**`,
+        { parse_mode: 'Markdown' }
+      );
+    }
+    
+  } catch (error) {
+    console.error(`❌ MTG Recovery error: ${error.message}`);
+  } finally {
+    isRecoveryMode = false;
+    recoveryAttempts = 0;
   }
 }
 
@@ -900,12 +1216,11 @@ async function runSession(bot, sessionName, isManual = false) {
     await sleep(1500);
 
     await safeSendMessage(bot,
-      `🏁 **QX AI LIVE V6.0**\n\n` +
-      `📈 Everyone stay ready!\n\n` +
-      `⏰ Time: ${display} (BD Time)\n` +
-      `📊 Session: ${getTradingSessionName()}\n\n` +
-      `🎯 Best signals coming soon!\n` +
-      `💰 Trade with proper risk management.`,
+      `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬**\n\n` +
+      `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
+      `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
+      `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
+      `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই অনুসরণ করুন।**`,
       { parse_mode: 'Markdown' }
     );
 
@@ -919,8 +1234,8 @@ async function runSession(bot, sessionName, isManual = false) {
     const MAX_SIGNALS = 5;
     let isFirstSignal = true;
     let lastSignalTime = Date.now();
-    const MIN_SIGNAL_GAP = 5 * 60 * 1000;   // ✅ কমপক্ষে ৫ মিনিট গ্যাপ
-    const MAX_SIGNAL_GAP = 15 * 60 * 1000;  // ✅ সর্বোচ্চ ১৫ মিনিটের মধ্যে সিগন্যাল
+    const MIN_SIGNAL_GAP = 5 * 60 * 1000;
+    const MAX_SIGNAL_GAP = 15 * 60 * 1000;
 
     while (Date.now() - sessionStart < SESSION_DURATION && signalCount < MAX_SIGNALS) {
       if (!sessionRunning) {
@@ -936,7 +1251,7 @@ async function runSession(bot, sessionName, isManual = false) {
 
       let best = null;
       try {
-        best = await findBestPair(isManual, forceRelaxed); // isManual = true → bypass time check
+        best = await findBestPair(isManual, forceRelaxed);
         if (forceRelaxed && best) console.log(`⚡ 15min limit reached — sending relaxed signal: ${best.symbol}`);
       } catch (e) {
         console.error(`❌ Error: ${e.message}`);
@@ -950,7 +1265,6 @@ async function runSession(bot, sessionName, isManual = false) {
         continue;
       }
 
-      // ✅ Minimum ৫ মিনিট গ্যাপ নিশ্চিত করা (প্রথম সিগন্যাল বাদে)
       if (!isFirstSignal && gapSinceLast < MIN_SIGNAL_GAP) {
         const waitMore = MIN_SIGNAL_GAP - gapSinceLast;
         console.log(`⏱️ Min gap not met, waiting ${Math.round(waitMore/1000)}s more...`);
@@ -964,8 +1278,11 @@ async function runSession(bot, sessionName, isManual = false) {
       isFirstSignal = false;
 
       try {
-        const result = await sendProSignal(bot, best);
-        if (result !== null) { signalCount++; lastSignalTime = Date.now(); }
+        const result = await sendProSignal(bot, best, false);
+        if (result !== null && result.isWin !== undefined) { 
+          signalCount++; 
+          lastSignalTime = Date.now(); 
+        }
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
       }
@@ -1016,7 +1333,7 @@ module.exports = function (bot) {
     return;
   }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v6.0 + Chart + Extra Indicators)');
+  console.log('✅ Scheduler started (v6.0 + 14 High Accuracy Indicators)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
@@ -1024,7 +1341,6 @@ module.exports = function (bot) {
     try {
       const { h, m, s, dateKey } = getBDTime();
 
-      // Reminders & Sessions (same as before)
       if (h === 11 && m === 30 && s < 10) {
         const key = generateReminderKey('morning_reminder');
         if (!sentReminders.has(key)) {
