@@ -492,29 +492,25 @@ async function analyzeSymbol(symbol) {
 
 async function generateChart(symbol, candles, direction, entryPrice, exitPrice) {
   try {
-    const width = 800, height = 450;
-    const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
     const plotCandles = candles.slice(-30);
-    const labels = plotCandles.map((_, i) => `${i+1}m`);
-    
-    const data = {
-      labels: labels,
-      datasets: [{
-        label: symbol,
-        data: plotCandles.map((c, i) => ({
-          x: i,
-          y: [c.open, c.high, c.low, c.close]
-        })),
-        borderColor: direction === 'UP' ? '#00ff88' : '#ff4444',
-        backgroundColor: direction === 'UP' ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)',
-      }]
-    };
+    const labels = plotCandles.map((_, i) => `${i + 1}`);
+    const closes = plotCandles.map(c => c.close);
 
-    const config = {
-      type: 'candlestick',
-      data: data,
+    const chartConfig = {
+      type: 'line',
+      data: {
+        labels: labels,
+        datasets: [{
+          label: symbol,
+          data: closes,
+          borderColor: direction === 'UP' ? '#00ff88' : '#ff4444',
+          backgroundColor: direction === 'UP' ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)',
+          fill: true,
+          tension: 0.2,
+          pointRadius: 0
+        }]
+      },
       options: {
-        responsive: true,
         plugins: {
           legend: { labels: { color: '#ffffff' } },
           annotation: {
@@ -523,16 +519,10 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
                 type: 'line',
                 yMin: entryPrice,
                 yMax: entryPrice,
-                borderColor: 'rgba(255,215,0,0.8)',
+                borderColor: 'rgba(255,215,0,0.9)',
                 borderWidth: 2,
-                borderDash: [6,4],
-                label: {
-                  content: '⬇️ ENTRY',
-                  enabled: true,
-                  position: 'start',
-                  backgroundColor: 'rgba(255,215,0,0.7)',
-                  color: '#000'
-                }
+                borderDash: [6, 4],
+                label: { content: 'ENTRY', enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.8)', color: '#000' }
               },
               exitLine: {
                 type: 'line',
@@ -540,12 +530,12 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
                 yMax: exitPrice,
                 borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444',
                 borderWidth: 2,
-                borderDash: [6,4],
+                borderDash: [6, 4],
                 label: {
-                  content: exitPrice > entryPrice ? '✅ WIN' : '❌ LOSS',
+                  content: exitPrice > entryPrice ? 'WIN' : 'LOSS',
                   enabled: true,
                   position: 'end',
-                  backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.8)' : 'rgba(255,68,68,0.8)',
+                  backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)',
                   color: '#fff'
                 }
               }
@@ -559,14 +549,25 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
       }
     };
 
-    const imageBuffer = await chartJSNodeCanvas.renderToBuffer(config);
+    const response = await fetch('https://quickchart.io/chart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chart: chartConfig,
+        width: 800,
+        height: 450,
+        backgroundColor: '#1a1a2e'
+      })
+    });
+
+    if (!response.ok) throw new Error(`QuickChart error: ${response.status}`);
+    const imageBuffer = await response.buffer();
     return imageBuffer;
   } catch (error) {
     console.error('❌ Chart generation failed:', error.message);
     return null;
   }
 }
-
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🔍 BEST PAIR FINDER (with ignoreTime)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
