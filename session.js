@@ -2,7 +2,7 @@
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
-const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
+const fetch = require('node-fetch');
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 📌 CONFIGURATION
