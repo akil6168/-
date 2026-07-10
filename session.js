@@ -1,5 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (v6.0 + High Accuracy Indicators)
-// FIXED: Timing bug fixed + Chart format fixed
+// session.js - Qx AI Predictor VIP Session (Pro v6.0 + Candle Chart + Smart MTG Recovery)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -270,7 +269,7 @@ function checkLossStreak() {
 // 📨 SAFE SENDERS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function safeSendSticker(bot, fileId, retries = 1) {
+async function safeSendSticker(bot, fileId, retries = 2) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try { await bot.sendSticker(CHANNEL_ID, fileId); return true; } catch(e) {
       console.log(`⚠️ Sticker send failed (${attempt}): ${e.message}`);
@@ -280,7 +279,7 @@ async function safeSendSticker(bot, fileId, retries = 1) {
   return false;
 }
 
-async function safeSendMessage(bot, text, options = {}, retries = 1) {
+async function safeSendMessage(bot, text, options = {}, retries = 2) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
       const result = await bot.sendMessage(CHANNEL_ID, text, options);
@@ -293,14 +292,18 @@ async function safeSendMessage(bot, text, options = {}, retries = 1) {
   return null;
 }
 
-async function safeSendPhoto(bot, photo, caption = '', retries = 1) {
+async function safeSendPhoto(bot, photo, caption = '', retries = 2) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const result = await bot.sendPhoto(CHANNEL_ID, photo, { caption });
+      const result = await bot.sendPhoto(CHANNEL_ID, photo, { 
+        caption: caption || '📊 Chart',
+        parse_mode: 'Markdown'
+      });
+      console.log(`📸 Photo sent: ${caption.substring(0, 30)}...`);
       return result;
     } catch(e) {
       console.log(`⚠️ Photo send failed (${attempt}): ${e.message}`);
-      if (attempt < retries) await sleep(1000);
+      if (attempt < retries) await sleep(1500);
     }
   }
   return null;
@@ -736,13 +739,14 @@ async function analyzeSymbol(symbol, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CANDLE CHART GENERATOR (FIXED FORMAT)
+// 📊 CANDLE CHART GENERATOR (FIXED - Working)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function generateCandleChart(symbol, candles, direction, entryPrice, exitPrice, isMTG = false) {
   try {
     const plotCandles = candles.slice(-20);
-    // ✅ ফিক্স: QuickChart কম্প্যাটিবল ফরম্যাট {x, o, h, l, c}
+    
+    // ✅ ফরম্যাট ১: QuickChart candlestick ফরম্যাট
     const ohlcData = plotCandles.map((c, i) => ({
       x: i + 1,
       o: c.open,
@@ -751,9 +755,13 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
       c: c.close
     }));
     
+    // ✅ লেবেল তৈরি
+    const labels = plotCandles.map((_, i) => `${i+1}`);
+    
     const chartConfig = {
       type: 'candlestick',
       data: {
+        labels: labels,
         datasets: [{
           label: `${symbol}`,
           data: ohlcData,
@@ -766,7 +774,9 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
       },
       options: {
         plugins: {
-          legend: { labels: { color: '#ffffff' } },
+          legend: {
+            labels: { color: '#ffffff' }
+          },
           annotation: {
             annotations: {
               entryLine: {
@@ -776,12 +786,13 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
                 borderColor: 'rgba(255,215,0,0.9)',
                 borderWidth: 2,
                 borderDash: [6, 4],
-                label: { 
-                  content: isMTG ? 'MTG ENTRY' : 'ENTRY', 
-                  enabled: true, 
-                  position: 'start', 
-                  backgroundColor: 'rgba(255,215,0,0.8)', 
-                  color: '#000' 
+                label: {
+                  content: isMTG ? 'MTG ENTRY' : 'ENTRY',
+                  enabled: true,
+                  position: 'start',
+                  backgroundColor: 'rgba(255,215,0,0.8)',
+                  color: '#000',
+                  font: { size: 10 }
                 }
               },
               exitLine: {
@@ -796,41 +807,99 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
                   enabled: true,
                   position: 'end',
                   backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)',
-                  color: '#fff'
+                  color: '#fff',
+                  font: { size: 10 }
                 }
               }
             }
           }
         },
         scales: {
-          x: { 
-            ticks: { color: '#aaa' },
+          x: {
+            ticks: { color: '#aaa', font: { size: 9 } },
             grid: { color: 'rgba(255,255,255,0.05)' }
           },
-          y: { 
-            ticks: { color: '#aaa' },
+          y: {
+            ticks: { color: '#aaa', font: { size: 9 } },
             grid: { color: 'rgba(255,255,255,0.05)' }
           }
         }
       }
     };
 
+    // ✅ QuickChart API কল
+    console.log(`📊 Generating chart via QuickChart...`);
     const response = await fetch('https://quickchart.io/chart', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'image/png'
+      },
       body: JSON.stringify({
         chart: chartConfig,
         width: 800,
         height: 450,
-        backgroundColor: '#1a1a2e'
+        backgroundColor: '#1a1a2e',
+        format: 'png'
       })
     });
 
-    if (!response.ok) throw new Error(`QuickChart error: ${response.status}`);
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`❌ QuickChart error: ${response.status} - ${errorText}`);
+      throw new Error(`QuickChart error: ${response.status}`);
+    }
+
     const imageBuffer = await response.buffer();
+    console.log(`✅ Chart generated: ${imageBuffer.length} bytes`);
     return imageBuffer;
+
   } catch (error) {
-    console.error('❌ Candle chart generation failed:', error.message);
+    console.error(`❌ Chart generation failed:`, error.message);
+    
+    // ✅ ফেইলব্যাক: টেক্সট চার্ট
+    return await generateTextChart(symbol, candles, direction, entryPrice, exitPrice, isMTG);
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📊 TEXT CHART (Fallback)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function generateTextChart(symbol, candles, direction, entryPrice, exitPrice, isMTG = false) {
+  try {
+    const plotCandles = candles.slice(-20);
+    const closes = plotCandles.map(c => c.close);
+    const min = Math.min(...closes);
+    const max = Math.max(...closes);
+    const range = max - min || 0.0001;
+    const height = 10;
+    
+    let chart = '';
+    for (let row = height; row >= 0; row--) {
+      let line = '';
+      for (let i = 0; i < closes.length; i++) {
+        const normalized = (closes[i] - min) / range;
+        const pos = Math.round(normalized * height);
+        if (pos === row) {
+          line += '█';
+        } else {
+          line += '░';
+        }
+      }
+      chart += line + '\n';
+    }
+    
+    const isWin = exitPrice > entryPrice;
+    
+    return Buffer.from(
+      `📊 ${symbol} ${isMTG ? '(MTG)' : ''}\n` +
+      `${chart}\n` +
+      `🟡 ENTRY: ${entryPrice.toFixed(5)} ${isWin ? '✅' : '❌'}\n` +
+      `🔴 EXIT:  ${exitPrice.toFixed(5)} ${isWin ? '✅ WIN' : '❌ LOSS'}\n` +
+      `📈 ${direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴'}\n`
+    );
+  } catch (e) {
     return null;
   }
 }
@@ -900,13 +969,11 @@ function waitForExactSecond(targetSecond) {
   });
 }
 
-// ✅ ফিক্স: waitForCandleClose এখন সঠিকভাবে কাজ করে
 function waitForCandleClose() {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      // ৫৮ সেকেন্ডে ফায়ার হবে (candle close এর ২ সেকেন্ড আগে)
       if (s >= 58) {
         clearInterval(check);
         resolve();
@@ -931,7 +998,7 @@ function waitForNewCandle() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER (FIXED TIMING)
+// 🎯 PRO SIGNAL SENDER (with Chart)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = null, exitPriceOverride = null) {
@@ -945,9 +1012,10 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : '';
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
+  const directionEmoji = signal.direction === 'UP' ? '🟢' : '🔴';
 
   try {
-    // ━━━ Signal Message ━━━
+    // ━━━ 1. Signal Message ━━━
     await safeSendMessage(bot,
       `╔════════════════════╗\n` +
       `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
@@ -965,19 +1033,19 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Wait for 45 second ━━━
+    // ━━━ 2. Wait for 45 second ━━━
     console.log(`⏳ Waiting for signal timing (45s)...`);
     await waitForExactSecond(45);
     
     const bdTime = getBDTime();
     console.log(`📡 Signal timing! Entry at: ${bdTime.fullTime}`);
 
-    // ━━━ Direction Sticker ━━━
+    // ━━━ 3. Direction Sticker ━━━
     const dirSticker = isMTG ? (signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN) : (signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT);
     await safeSendSticker(bot, dirSticker);
     console.log(`✅ ${signal.symbol} ${dirLabel}${isMTG ? ' (MTG)' : ''}`);
 
-    // ━━━ Entry Price (59 second) ━━━
+    // ━━━ 4. Entry Price (59 second) ━━━
     await waitForExactSecond(59);
     let entryPrice = entryPriceOverride || signal.currentPrice;
     try {
@@ -986,7 +1054,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
     } catch(e) {}
     console.log(`💰 Entry Price: ${entryPrice} at ${getBDTime().fullTime}`);
 
-    // ━━━ Live Price Update ━━━
+    // ━━━ 5. Live Price Update ━━━
     await safeSendMessage(bot,
       `💹 **LIVE PRICE UPDATE**\n\n` +
       `📊 ${signal.symbol}\n` +
@@ -998,13 +1066,13 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ ✅ CRITICAL FIX: Wait for next candle to close ━━━
+    // ━━━ 6. ✅ CRITICAL FIX: Wait for next candle to close ━━━
     console.log(`⏳ Waiting for next candle to close (~60s)...`);
     await sleep(55000); // ✅ 55 সেকেন্ড wait - পরের candle এর কাছাকাছি
     await waitForCandleClose(); // এখন 58+ সেকেন্ডে ফায়ার হবে
     await sleep(1500);
 
-    // ━━━ Exit Price ━━━
+    // ━━━ 7. Exit Price ━━━
     let exitPrice = exitPriceOverride || entryPrice;
     try {
       const priceData = await getCurrentPrice(signal.symbol);
@@ -1012,7 +1080,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
     } catch(e) {}
     console.log(`💰 Exit Price: ${exitPrice} at ${getBDTime().fullTime}`);
 
-    // ━━━ Result ━━━
+    // ━━━ 8. Result ━━━
     const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
     console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
 
@@ -1022,14 +1090,30 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
     }
     tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
-    // ━━━ Candle Chart ━━━
-    const chartBuffer = await generateCandleChart(signal.symbol, signal.candles, signal.direction, entryPrice, exitPrice, isMTG);
+    // ━━━ 9. Candle Chart ━━━
+    console.log(`📊 Generating chart for ${signal.symbol}...`);
+    const chartBuffer = await generateCandleChart(
+      signal.symbol, 
+      signal.candles, 
+      signal.direction, 
+      entryPrice, 
+      exitPrice, 
+      isMTG
+    );
+
     if (chartBuffer) {
-      const chartCaption = isMTG ? `📊 MTG ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}` : `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}`;
+      const chartCaption = isMTG ? 
+        `📊 MTG ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}` : 
+        `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}`;
+      
+      console.log(`📤 Sending chart...`);
       await safeSendPhoto(bot, chartBuffer, chartCaption);
+      console.log(`✅ Chart sent!`);
+    } else {
+      console.log(`⚠️ No chart buffer, skipping...`);
     }
 
-    // ━━━ Result Message ━━━
+    // ━━━ 10. Result Message ━━━
     const todayStats = tracker.getTodayStats();
     
     if (isWin) {
@@ -1214,7 +1298,7 @@ async function runSession(bot, sessionName, isManual = false) {
       `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
       `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
       `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
-      `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই অনুসরণ করুন।**`,
+      `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝗧 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻T অবশ্যই অনুসরণ করুন।**`,
       { parse_mode: 'Markdown' }
     );
 
@@ -1327,7 +1411,7 @@ module.exports = function (bot) {
     return;
   }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v6.0 + 14 High Accuracy Indicators + FIXED TIMING)');
+  console.log('✅ Scheduler started (v6.0 + 14 High Accuracy Indicators + FIXED CHART)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
