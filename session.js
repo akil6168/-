@@ -1,4 +1,5 @@
 // session.js - Qx AI Predictor VIP Session (v6.0 + High Accuracy Indicators)
+// FIXED: Timing bug fixed + Chart format fixed
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -314,7 +315,7 @@ async function getCurrentPrice(symbol) {
   return parseFloat(data.price);
 }
 
-async function getCandles(symbol, count = 50, interval = '1min') {
+async function getCandles(symbol, count = 52, interval = '1min') {
   const data = await twelveData.getTimeSeries(symbol, interval, count);
   if (!data.values || !data.values.length) throw new Error('No data');
   const lastCandleTime = new Date(data.values[0].datetime + ' UTC');
@@ -330,7 +331,7 @@ async function getCandles(symbol, count = 50, interval = '1min') {
 // 📈 HIGH ACCURACY INDICATORS (14 Indicators)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// 1. RSI (14) - মূল RSI
+// 1. RSI (14)
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let gain = 0, loss = 0;
@@ -481,45 +482,32 @@ function calcTrend(candles) {
 // 11. Ichimoku Cloud
 function calcIchimoku(candles) {
   const len = candles.length;
-  if (len < 52) return { senkouA: 0, senkouB: 0, tenkan: 0, kijun: 0, chikou: 0, trend: 'NEUTRAL' };
+  if (len < 52) return { senkouA: 0, senkouB: 0, tenkan: 0, kijun: 0, chikou: 0, trend: 'NEUTRAL', up: 0, dn: 0, isStrong: false, label: 'Ichimoku Neutral' };
   
-  // Tenkan-sen (Conversion Line): (9-period high + low) / 2
   const high9 = Math.max(...candles.slice(-9).map(c => c.high));
   const low9 = Math.min(...candles.slice(-9).map(c => c.low));
   const tenkan = (high9 + low9) / 2;
   
-  // Kijun-sen (Base Line): (26-period high + low) / 2
   const high26 = Math.max(...candles.slice(-26).map(c => c.high));
   const low26 = Math.min(...candles.slice(-26).map(c => c.low));
   const kijun = (high26 + low26) / 2;
   
-  // Senkou Span A: (Tenkan + Kijun) / 2 (26 periods ahead)
   const senkouA = (tenkan + kijun) / 2;
   
-  // Senkou Span B: (52-period high + low) / 2 (26 periods ahead)
   const high52 = Math.max(...candles.slice(-52).map(c => c.high));
   const low52 = Math.min(...candles.slice(-52).map(c => c.low));
   const senkouB = (high52 + low52) / 2;
   
-  // Chikou Span: Close price shifted 26 periods back
   const chikou = candles.length >= 26 ? candles[candles.length - 26].close : candles[0].close;
-  
-  // Current price
   const last = candles[candles.length - 1].close;
   
-  // Trend determination
-  let trend = 'NEUTRAL';
   let up = 0, dn = 0;
+  if (last > senkouA && last > senkouB) { up += 3; }
+  else if (last < senkouA && last < senkouB) { dn += 3; }
   
-  // Price above/below cloud
-  if (last > senkouA && last > senkouB) { up += 3; trend = 'UP'; }
-  else if (last < senkouA && last < senkouB) { dn += 3; trend = 'DOWN'; }
-  
-  // Tenkan above Kijun = bullish
   if (tenkan > kijun) up += 2;
   else dn += 2;
   
-  // Chikou above price = bullish
   if (chikou > last) up += 2;
   else dn += 2;
   
@@ -532,7 +520,7 @@ function calcIchimoku(candles) {
   };
 }
 
-// 12. MFI (Money Flow Index) - RSI + Volume
+// 12. MFI (Money Flow Index)
 function calcMFI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let positiveFlow = 0, negativeFlow = 0;
@@ -572,7 +560,6 @@ function calcFibonacci(candles) {
     level100: low
   };
   
-  // Check which level price is near
   let nearLevel = null;
   let nearDist = Infinity;
   for (const [key, value] of Object.entries(levels)) {
@@ -583,7 +570,6 @@ function calcFibonacci(candles) {
     }
   }
   
-  // 61.8% is the most important level
   const near618 = Math.abs(last - levels.level618) / last < 0.001;
   const above618 = last > levels.level618;
   
@@ -682,16 +668,16 @@ async function analyzeSymbol(symbol, relaxed = false) {
   if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
   else signals.push('EMA Bearish Alignment');
 
-  // ━━ 11. Ichimoku Cloud ━━ (NEW)
+  // ━━ 11. Ichimoku Cloud ━━
   up += ichimoku.up; dn += ichimoku.dn;
   if (ichimoku.trend === 'UP') signals.push(ichimoku.label);
   else if (ichimoku.trend === 'DOWN') signals.push(ichimoku.label);
 
-  // ━━ 12. MFI ━━ (NEW)
+  // ━━ 12. MFI ━━
   if (mfi < 20) { up += 3; signals.push(`MFI Oversold (${mfi.toFixed(0)})`); }
   else if (mfi > 80) { dn += 3; signals.push(`MFI Overbought (${mfi.toFixed(0)})`); }
 
-  // ━━ 13. Fibonacci ━━ (NEW)
+  // ━━ 13. Fibonacci ━━
   if (fib.near618) {
     if (fib.above618) { up += 3; signals.push('Fib 61.8% Support ✅'); }
     else { dn += 3; signals.push('Fib 61.8% Resistance ⚠️'); }
@@ -700,7 +686,7 @@ async function analyzeSymbol(symbol, relaxed = false) {
     signals.push(`Near Fib ${fib.nearLevel.replace('level', '')}%`);
   }
 
-  // ━━ 14. Chaikin Money Flow ━━ (NEW)
+  // ━━ 14. Chaikin Money Flow ━━
   if (cmf > 0.1) { up += 2; signals.push('CMF Bullish 🟢'); }
   else if (cmf < -0.1) { dn += 2; signals.push('CMF Bearish 🔴'); }
 
@@ -742,7 +728,6 @@ async function analyzeSymbol(symbol, relaxed = false) {
     isSureShot: aiScore >= 90 && directionsAgree >= 5,
     isValid, sr, candles,
     adx: adx.adx, directionsAgree,
-    // New indicator data for logging
     ichimoku: ichimoku.trend,
     mfi: mfi,
     fib: fib.nearLevel,
@@ -751,20 +736,26 @@ async function analyzeSymbol(symbol, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CANDLE CHART GENERATOR
+// 📊 CANDLE CHART GENERATOR (FIXED FORMAT)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function generateCandleChart(symbol, candles, direction, entryPrice, exitPrice, isMTG = false) {
   try {
     const plotCandles = candles.slice(-20);
-    const ohlcData = plotCandles.map(c => [c.open, c.high, c.low, c.close]);
+    // ✅ ফিক্স: QuickChart কম্প্যাটিবল ফরম্যাট {x, o, h, l, c}
+    const ohlcData = plotCandles.map((c, i) => ({
+      x: i + 1,
+      o: c.open,
+      h: c.high,
+      l: c.low,
+      c: c.close
+    }));
     
     const chartConfig = {
       type: 'candlestick',
       data: {
-        labels: plotCandles.map((_, i) => `${i+1}`),
         datasets: [{
-          label: `${symbol} Candlestick`,
+          label: `${symbol}`,
           data: ohlcData,
           color: {
             up: '#00ff88',
@@ -909,11 +900,13 @@ function waitForExactSecond(targetSecond) {
   });
 }
 
+// ✅ ফিক্স: waitForCandleClose এখন সঠিকভাবে কাজ করে
 function waitForCandleClose() {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
+      // ৫৮ সেকেন্ডে ফায়ার হবে (candle close এর ২ সেকেন্ড আগে)
       if (s >= 58) {
         clearInterval(check);
         resolve();
@@ -938,7 +931,7 @@ function waitForNewCandle() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER
+// 🎯 PRO SIGNAL SENDER (FIXED TIMING)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = null, exitPriceOverride = null) {
@@ -991,7 +984,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       const priceData = await getCurrentPrice(signal.symbol);
       if (priceData) entryPrice = priceData;
     } catch(e) {}
-    console.log(`💰 Entry Price: ${entryPrice}`);
+    console.log(`💰 Entry Price: ${entryPrice} at ${getBDTime().fullTime}`);
 
     // ━━━ Live Price Update ━━━
     await safeSendMessage(bot,
@@ -1005,9 +998,10 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Wait for candle close ━━━
-    console.log(`⏳ Waiting for candle close...`);
-    await waitForCandleClose();
+    // ━━━ ✅ CRITICAL FIX: Wait for next candle to close ━━━
+    console.log(`⏳ Waiting for next candle to close (~60s)...`);
+    await sleep(55000); // ✅ 55 সেকেন্ড wait - পরের candle এর কাছাকাছি
+    await waitForCandleClose(); // এখন 58+ সেকেন্ডে ফায়ার হবে
     await sleep(1500);
 
     // ━━━ Exit Price ━━━
@@ -1016,7 +1010,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       const priceData = await getCurrentPrice(signal.symbol);
       if (priceData) exitPrice = priceData;
     } catch(e) {}
-    console.log(`💰 Exit Price: ${exitPrice}`);
+    console.log(`💰 Exit Price: ${exitPrice} at ${getBDTime().fullTime}`);
 
     // ━━━ Result ━━━
     const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
@@ -1333,7 +1327,7 @@ module.exports = function (bot) {
     return;
   }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v6.0 + 14 High Accuracy Indicators)');
+  console.log('✅ Scheduler started (v6.0 + 14 High Accuracy Indicators + FIXED TIMING)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
