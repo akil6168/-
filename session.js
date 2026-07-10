@@ -1,5 +1,11 @@
-// session.js - Qx AI Predictor VIP Session (Upgraded & Fixed)
+// session.js - Qx AI Predictor VIP Session (Pro Version v5.0)
 const twelveData = require('./twelvedata');
+const fs = require('fs');
+const path = require('path');
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📌 CONFIGURATION
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const CHANNEL_ID = '-1002268650240';
 const ADMIN_ID = 5724602667;
@@ -17,38 +23,166 @@ const STICKERS = {
   SURESHOT:      'CAACAgUAAxkBAAIJN2pPWNbKDC9YJaHXrsaf1uO1aXmoAAKCJQACS0qAVqdi7137PDZoPAQ'
 };
 
+// ✅ Pro Trading Pairs with Priority
 const SESSION_PAIRS = [
-  { symbol: 'EUR/USD', flag: '🇪🇺🇺🇸' },
-  { symbol: 'GBP/USD', flag: '🇬🇧🇺🇸' },
-  { symbol: 'USD/JPY', flag: '🇺🇸🇯🇵' },
-  { symbol: 'AUD/USD', flag: '🇦🇺🇺🇸' },
-  { symbol: 'EUR/GBP', flag: '🇪🇺🇬🇧' },
-  { symbol: 'USD/CHF', flag: '🇺🇸🇨🇭' },
-  { symbol: 'EUR/JPY', flag: '🇪🇺🇯🇵' },
-  { symbol: 'GBP/JPY', flag: '🇬🇧🇯🇵' }
+  { symbol: 'EUR/USD', flag: '🇪🇺🇺🇸', priority: 1 },
+  { symbol: 'GBP/USD', flag: '🇬🇧🇺🇸', priority: 2 },
+  { symbol: 'USD/JPY', flag: '🇺🇸🇯🇵', priority: 3 },
+  { symbol: 'EUR/GBP', flag: '🇪🇺🇬🇧', priority: 4 },
+  { symbol: 'USD/CHF', flag: '🇺🇸🇨🇭', priority: 5 },
+  { symbol: 'EUR/JPY', flag: '🇪🇺🇯🇵', priority: 6 },
+  { symbol: 'GBP/JPY', flag: '🇬🇧🇯🇵', priority: 7 },
+  { symbol: 'AUD/USD', flag: '🇦🇺🇺🇸', priority: 8 }
 ];
 
-// ─────────────────────────────────────────
-// ✅ SESSION STATE MANAGEMENT (IMPROVED)
-// ─────────────────────────────────────────
+// ✅ Market Sessions (BD Time = GMT+6)
+const MARKET_SESSIONS = {
+  LONDON: {
+    OPEN: 14,
+    CLOSE: 23,
+    BEST_HOURS: [15, 16, 17, 18, 19, 20],
+    PAIRS: ['EUR/USD', 'GBP/USD', 'EUR/GBP', 'EUR/JPY', 'GBP/JPY']
+  },
+  NEWYORK: {
+    OPEN: 19,
+    CLOSE: 4,
+    BEST_HOURS: [20, 21, 22, 23, 0],
+    PAIRS: ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF']
+  },
+  TOKYO: {
+    OPEN: 6,
+    CLOSE: 15,
+    BEST_HOURS: [7, 8, 9, 10, 11],
+    PAIRS: ['USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/USD']
+  }
+};
+
+// ✅ Trading Schedule (BD Time)
+const TRADING_SCHEDULE = [
+  { start: 11, end: 14, name: 'Morning Momentum' },
+  { start: 16, end: 20, name: 'London Session' },
+  { start: 21, end: 23, name: 'NY Session' }
+];
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📊 PERFORMANCE TRACKER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+class PerformanceTracker {
+  constructor() {
+    this.statsFile = path.join(__dirname, 'stats.json');
+    this.stats = {
+      total: 0,
+      wins: 0,
+      losses: 0,
+      winRate: 0,
+      sessions: {},
+      pairs: {},
+      daily: {}
+    };
+    this.loadStats();
+  }
+
+  loadStats() {
+    try {
+      if (fs.existsSync(this.statsFile)) {
+        this.stats = JSON.parse(fs.readFileSync(this.statsFile));
+      }
+    } catch (e) {
+      console.log('📊 No stats file found, creating new...');
+    }
+  }
+
+  saveStats() {
+    try {
+      fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2));
+    } catch (e) {
+      console.log('⚠️ Failed to save stats:', e.message);
+    }
+  }
+
+  addResult(symbol, direction, isWin) {
+    const today = getBDTime().dateKey;
+    
+    this.stats.total++;
+    if (isWin) this.stats.wins++;
+    else this.stats.losses++;
+    this.stats.winRate = (this.stats.wins / this.stats.total * 100);
+
+    if (!this.stats.pairs[symbol]) {
+      this.stats.pairs[symbol] = { wins: 0, losses: 0 };
+    }
+    if (isWin) this.stats.pairs[symbol].wins++;
+    else this.stats.pairs[symbol].losses++;
+
+    if (!this.stats.daily[today]) {
+      this.stats.daily[today] = { wins: 0, losses: 0 };
+    }
+    if (isWin) this.stats.daily[today].wins++;
+    else this.stats.daily[today].losses++;
+
+    this.saveStats();
+  }
+
+  getStatsMessage() {
+    const { total, wins, losses, winRate, pairs } = this.stats;
+    const today = getBDTime().dateKey;
+    const daily = this.stats.daily[today] || { wins: 0, losses: 0 };
+    
+    let pairStats = '';
+    const sortedPairs = Object.entries(pairs)
+      .sort((a, b) => (b[1].wins + b[1].losses) - (a[1].wins + a[1].losses));
+    
+    for (const [symbol, data] of sortedPairs.slice(0, 5)) {
+      const rate = data.wins + data.losses > 0 
+        ? (data.wins / (data.wins + data.losses) * 100) 
+        : 0;
+      pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
+    }
+
+    return `
+📊 **QX AI PERFORMANCE v5.0**
+
+━━━━━━━━━━━━━━━━━━━
+📈 **TOTAL**: ${total}
+✅ **WINS**: ${wins}
+❌ **LOSSES**: ${losses}
+🎯 **WIN RATE**: ${winRate.toFixed(1)}%
+━━━━━━━━━━━━━━━━━━━
+
+📅 **TODAY**: ${daily.wins}W / ${daily.losses}L
+
+📊 **TOP PAIRS**
+${pairStats || '  No data yet'}
+
+💎 **OWNER**: @AkiL_xD 👾
+    `;
+  }
+}
+
+const tracker = new PerformanceTracker();
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ⏰ SESSION STATE MANAGEMENT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 let sessionRunning = false;
 let sessionLockTimestamp = 0;
 let currentSessionId = null;
 let schedulerInitialized = false;
 let schedulerInterval = null;
+let lossStreak = 0;
+const MAX_LOSS_STREAK = 2;
 
-// Track sent signals and sessions to prevent duplicates
-const sentSignals = new Map(); // Map<signalKey, timestamp>
-const completedSessions = new Map(); // Map<sessionKey, timestamp>
-const sentReminders = new Map(); // Map<reminderKey, timestamp>
-
-// Lock timeout (if session hangs, allow restart after 45 minutes)
+const sentSignals = new Map();
+const completedSessions = new Map();
+const sentReminders = new Map();
 const SESSION_LOCK_TIMEOUT = 45 * 60 * 1000;
+const lastResults = [];
 
-// ─────────────────────────────────────────
-// ✅ HELPER FUNCTIONS
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🛠️ HELPER FUNCTIONS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function getBDTime() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
@@ -63,7 +197,7 @@ function getBDTime() {
     mStr: String(m).padStart(2, '0'),
     sStr: String(s).padStart(2, '0'),
     display: `${h12}:${String(m).padStart(2, '0')} ${period}`,
-    dateKey: `${bd.getUTCFullYear()}-${bd.getUTCMonth()}-${bd.getUTCDate()}`
+    dateKey: `${bd.getUTCFullYear()}-${String(bd.getUTCMonth()+1).padStart(2,'0')}-${String(bd.getUTCDate()).padStart(2,'0')}`
   };
 }
 
@@ -86,11 +220,9 @@ function generateReminderKey(type) {
   return `${dateKey}-${type}-${h}-${m}`;
 }
 
-// Clean old entries from tracking maps (older than 2 hours)
 function cleanupOldEntries() {
   const now = Date.now();
   const maxAge = 2 * 60 * 60 * 1000;
-
   for (const [key, timestamp] of sentSignals.entries()) {
     if (now - timestamp > maxAge) sentSignals.delete(key);
   }
@@ -102,25 +234,19 @@ function cleanupOldEntries() {
   }
 }
 
-// ─────────────────────────────────────────
-// ✅ SESSION LOCK MANAGEMENT
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔒 SESSION LOCK MANAGEMENT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function acquireSessionLock(sessionName) {
   const now = Date.now();
-
-  // If session is running but lock is stale, release it
   if (sessionRunning && sessionLockTimestamp > 0) {
     if (now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
       console.log(`⚠️ Session lock timeout detected, releasing stale lock`);
       releaseSessionLock();
     }
   }
-
-  if (sessionRunning) {
-    return false;
-  }
-
+  if (sessionRunning) return false;
   sessionRunning = true;
   sessionLockTimestamp = now;
   currentSessionId = `${sessionName}-${now}`;
@@ -137,20 +263,84 @@ function releaseSessionLock() {
 
 function isSessionLocked() {
   if (!sessionRunning) return false;
-
-  // Check for stale lock
   const now = Date.now();
   if (sessionLockTimestamp > 0 && now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
     console.log(`⚠️ Stale session lock detected`);
     return false;
   }
-
   return true;
 }
 
-// ─────────────────────────────────────────
-// ✅ SAFE STICKER SENDER (with retry prevention)
-// ─────────────────────────────────────────
+function isGoodTradingTime() {
+  const { h } = getBDTime();
+  for (const slot of TRADING_SCHEDULE) {
+    if (h >= slot.start && h < slot.end) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function getActiveSessions() {
+  const { h } = getBDTime();
+  const active = [];
+  if (h >= MARKET_SESSIONS.LONDON.OPEN && h < MARKET_SESSIONS.LONDON.CLOSE) {
+    active.push('LONDON');
+  }
+  if (h >= MARKET_SESSIONS.NEWYORK.OPEN || h < MARKET_SESSIONS.NEWYORK.CLOSE) {
+    active.push('NEWYORK');
+  }
+  if (h >= MARKET_SESSIONS.TOKYO.OPEN && h < MARKET_SESSIONS.TOKYO.CLOSE) {
+    active.push('TOKYO');
+  }
+  return active;
+}
+
+function getTradingSessionName() {
+  const { h } = getBDTime();
+  for (const slot of TRADING_SCHEDULE) {
+    if (h >= slot.start && h < slot.end) {
+      return slot.name;
+    }
+  }
+  return 'Off-Hours';
+}
+
+function shouldSkipPair(symbol) {
+  const activeSessions = getActiveSessions();
+  const { h } = getBDTime();
+  
+  // Skip AUD/USD in morning
+  if (h < 12 && symbol === 'AUD/USD') return true;
+  
+  // Session based filtering
+  if (activeSessions.includes('LONDON')) {
+    if (!MARKET_SESSIONS.LONDON.PAIRS.includes(symbol)) return true;
+  }
+  if (activeSessions.includes('NEWYORK')) {
+    if (!MARKET_SESSIONS.NEWYORK.PAIRS.includes(symbol)) return true;
+  }
+  if (activeSessions.includes('TOKYO')) {
+    if (!MARKET_SESSIONS.TOKYO.PAIRS.includes(symbol)) return true;
+  }
+  
+  return false;
+}
+
+function checkLossStreak() {
+  if (lastResults.length >= 3) {
+    const losses = lastResults.filter(r => r === false).length;
+    if (losses >= MAX_LOSS_STREAK) {
+      console.log(`⚠️ Loss streak detected (${losses} losses), pausing...`);
+      return true;
+    }
+  }
+  return false;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📨 SAFE SENDERS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function safeSendSticker(bot, fileId, retries = 1) {
   for (let attempt = 1; attempt <= retries; attempt++) {
@@ -165,10 +355,6 @@ async function safeSendSticker(bot, fileId, retries = 1) {
   return false;
 }
 
-// ─────────────────────────────────────────
-// ✅ SAFE MESSAGE SENDER (with duplicate prevention)
-// ─────────────────────────────────────────
-
 async function safeSendMessage(bot, text, options = {}, retries = 1) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
@@ -182,23 +368,21 @@ async function safeSendMessage(bot, text, options = {}, retries = 1) {
   return null;
 }
 
-// ─────────────────────────────────────────
-// ✅ PRICE & CANDLE FUNCTIONS
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📊 PRICE & CANDLE FUNCTIONS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function getCurrentPrice(symbol) {
   const data = await twelveData.getPrice(symbol);
   return parseFloat(data.price);
 }
 
-async function getCandles(symbol, count = 50) {
-  const data = await twelveData.getTimeSeries(symbol, '1min', count);
+async function getCandles(symbol, count = 50, interval = '1min') {
+  const data = await twelveData.getTimeSeries(symbol, interval, count);
   if (!data.values || !data.values.length) throw new Error('No data');
-
   const lastCandleTime = new Date(data.values[0].datetime + ' UTC');
   const diffMinutes = (new Date() - lastCandleTime) / (60 * 1000);
   if (diffMinutes > 5) throw new Error('Stale data');
-
   return data.values.map(v => ({
     open: +v.open,
     high: +v.high,
@@ -208,9 +392,9 @@ async function getCandles(symbol, count = 50) {
   })).reverse();
 }
 
-// ─────────────────────────────────────────
-// ✅ TECHNICAL ANALYSIS
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📈 TECHNICAL ANALYSIS (All Indicators)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
@@ -253,11 +437,7 @@ function calcBB(candles, period = 20) {
   const closes = candles.slice(-p).map(c => c.close);
   const sma = closes.reduce((a, b) => a + b, 0) / p;
   const std = Math.sqrt(closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / p);
-  return {
-    upper: sma + 2 * std,
-    lower: sma - 2 * std,
-    mid: sma
-  };
+  return { upper: sma + 2 * std, lower: sma - 2 * std, mid: sma };
 }
 
 function calcATR(candles, period = 14) {
@@ -354,12 +534,25 @@ function calcCandlePattern(candles) {
   return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
 }
 
-// ─────────────────────────────────────────
-// ✅ FULL ANALYSIS
-// ─────────────────────────────────────────
+function calcSupportResistance(candles) {
+  const highs = candles.map(c => c.high);
+  const lows = candles.map(c => c.low);
+  const resistance = Math.max(...highs.slice(-20));
+  const support = Math.min(...lows.slice(-20));
+  const last = candles[candles.length - 1].close;
+  const nearResistance = Math.abs(last - resistance) / last < 0.001;
+  const nearSupport = Math.abs(last - support) / last < 0.001;
+  return { support, resistance, nearSupport, nearResistance };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔍 FULL ANALYSIS (UPGRADED)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function analyzeSymbol(symbol) {
   const candles = await getCandles(symbol, 50);
+  const h4Candles = await getCandles(symbol, 100, '5min');
+  
   const rsi = calcRSI(candles);
   const rsi7 = calcRSI(candles, 7);
   const stoch = calcStochRSI(candles);
@@ -369,40 +562,64 @@ async function analyzeSymbol(symbol) {
   const cci = calcCCI(candles);
   const wr = calcWilliamsR(candles);
   const trend = calcTrend(candles);
+  const h4Trend = calcTrend(h4Candles);
   const cp = calcCandlePattern(candles);
+  const sr = calcSupportResistance(candles);
   const last = candles[candles.length - 1].close;
 
   let up = 0, dn = 0;
   const signals = [];
 
+  // RSI
   if (rsi < 30) { up += 3; signals.push('RSI Oversold'); }
   else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
   else if (rsi < 45) up += 1;
   else if (rsi > 55) dn += 1;
 
+  // Fast RSI
   if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); }
   else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
 
+  // StochRSI
   if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); }
   else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
 
+  // MACD
   if (macd > 0) { up += 2; signals.push('MACD Bullish'); }
   else { dn += 2; signals.push('MACD Bearish'); }
 
+  // Bollinger Bands
   if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); }
   else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
 
+  // CCI
   if (cci < -100) { up += 2; signals.push('CCI Oversold'); }
   else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
 
+  // Williams %R
   if (wr < -80) { up += 2; signals.push('Williams %R Oversold'); }
   else if (wr > -20) { dn += 2; signals.push('Williams %R Overbought'); }
 
+  // Trend
   up += trend.up;
   dn += trend.dn;
   if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
   else signals.push('EMA Bearish Alignment');
 
+  // Higher TF Trend
+  if (trend.dir === h4Trend.dir) {
+    up += 2;
+    signals.push('HTF Confirmation ✅');
+  } else {
+    dn += 2;
+    signals.push('HTF Mismatch ⚠️');
+  }
+
+  // Support/Resistance
+  if (sr.nearSupport) { up += 3; signals.push('At Support Level ✅'); }
+  if (sr.nearResistance) { dn += 3; signals.push('At Resistance Level ⚠️'); }
+
+  // Candle Pattern
   if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); }
   else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
@@ -417,7 +634,10 @@ async function analyzeSymbol(symbol) {
   if (aiScore >= 90) confidence = 'Extreme High 🔥🔥';
   else if (aiScore >= 85) confidence = 'Very High 🔥';
   else if (aiScore >= 80) confidence = 'High ✅';
-  else confidence = 'Medium ⚡';
+  else if (aiScore >= 75) confidence = 'Medium ⚡';
+  else confidence = 'Low ⚠️';
+
+  const isValid = ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80;
 
   return {
     symbol,
@@ -425,39 +645,64 @@ async function analyzeSymbol(symbol) {
     ratio,
     aiScore,
     trend,
-    signals: signals.slice(0, 4),
+    h4Trend: h4Trend.dir,
+    signals: signals.slice(0, 5),
     currentPrice: last,
     volatility,
     confidence,
     isSureShot: aiScore >= 90,
-    isValid: ratio >= 0.80 && trend.isStrong && volatility >= 0.005
+    isValid,
+    sr,
+    candles
   };
 }
 
-// ─────────────────────────────────────────
-// ✅ BEST PAIR FINDER
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔍 BEST PAIR FINDER (UPGRADED)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function findBestPair() {
+  if (!isGoodTradingTime()) {
+    console.log(`⏰ ${getTradingSessionName()} - Not good trading time`);
+    return null;
+  }
+
+  if (checkLossStreak()) {
+    console.log('⏸️ Loss streak detected, pausing...');
+    return null;
+  }
+
   let best = null;
+  const activeSessions = getActiveSessions();
+  console.log(`📊 Active Sessions: ${activeSessions.join(', ') || 'None'}`);
 
   for (const pair of SESSION_PAIRS) {
     try {
-      const result = await analyzeSymbol(pair.symbol);
-      result.flag = pair.flag;
-
-      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid}`);
-
-      if (!result.isValid) {
-        await sleep(1200);
+      if (shouldSkipPair(pair.symbol)) {
+        console.log(`⏭️ Skipping ${pair.symbol} - Not suitable for current session`);
         continue;
       }
 
-      if (!best || result.aiScore > best.aiScore) {
-        best = result;
+      const result = await analyzeSymbol(pair.symbol);
+      result.flag = pair.flag;
+      result.priority = pair.priority;
+
+      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | Vol=${(result.volatility*100).toFixed(2)}%`);
+
+      if (!result.isValid) {
+        await sleep(800);
+        continue;
       }
 
-      await sleep(1200);
+      const priorityBonus = Math.max(0, (6 - pair.priority) * 0.5);
+      const finalScore = result.aiScore + priorityBonus;
+
+      if (!best || finalScore > (best.aiScore + Math.max(0, (6 - best.priority) * 0.5))) {
+        best = result;
+        best.finalScore = finalScore;
+      }
+
+      await sleep(800);
     } catch (e) {
       console.log(`❌ ${pair.symbol}: ${e.message}`);
       await sleep(500);
@@ -467,9 +712,9 @@ async function findBestPair() {
   return best;
 }
 
-// ─────────────────────────────────────────
-// ✅ CANDLE TIMING
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ⏰ CANDLE TIMING
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function waitForSignalTiming() {
   return new Promise(resolve => {
@@ -481,8 +726,6 @@ function waitForSignalTiming() {
         resolve();
       }
     }, 500);
-
-    // Safety timeout after 30 seconds
     setTimeout(() => {
       clearInterval(check);
       resolve();
@@ -500,8 +743,6 @@ function waitForCandleClose() {
         resolve();
       }
     }, 500);
-
-    // Safety timeout after 30 seconds
     setTimeout(() => {
       clearInterval(check);
       resolve();
@@ -509,56 +750,52 @@ function waitForCandleClose() {
   });
 }
 
-// ─────────────────────────────────────────
-// ✅ SINGLE SIGNAL FLOW (FIXED - No duplicate signals)
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🎯 PRO SIGNAL SENDER (NOALGO Style)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function sendSignalAndGetResult(bot, signal) {
-  // Generate unique signal key to prevent duplicates
+async function sendProSignal(bot, signal) {
   const signalKey = generateSignalKey(signal.symbol, signal.direction);
-
-  // Check if this signal was already sent
   if (sentSignals.has(signalKey)) {
     console.log(`⚠️ Signal already sent: ${signalKey}, skipping duplicate`);
     return null;
   }
-
-  // Mark signal as sent immediately to prevent race conditions
   sentSignals.set(signalKey, Date.now());
 
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : '';
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
+  const directionEmoji = signal.direction === 'UP' ? '🟢' : '🔴';
 
   try {
-    // ━━━ Step 1: Asset Info Message (Analysis complete, show details) ━━━
+    // ━━━ Step 1: Pro Signal Message ━━━
     await safeSendMessage(bot,
-      `╔══════════════════════╗\n` +
-      `     🚀 𝗤𝘅 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝗜𝗣\n` +
-      `╚══════════════════════╝\n\n` +
-      `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎯 𝗤𝘅 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘   ➜ ${signal.aiScore}%\n` +
-      `🔥 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ${signal.confidence}\n` +
-      `📊 𝗧𝗥𝗘𝗡𝗗      ➜ ${signal.trend.label}\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `📌 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n` +
-      signal.signals.map(s => `• ${s}`).join('\n') + '\n' +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
-      `• Maximum 1 Step MTG\n` +
-      `• Never Overtrade\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
+      `╔══════════════════════════════╗\n` +
+      `     🤖 QX AI LIVE V5.0\n` +
+      `     ${Math.floor(Math.random() * 1000 + 100)} monthly users\n` +
+      `╚══════════════════════════════╝\n\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
+      `📊 **ASSET**       ➜ ${signal.symbol} ${flag}\n` +
+      `🎯 **DIRECTION**   ➜ ${dirLabel} ${directionEmoji}\n` +
+      `📈 **CONFIDENCE**  ➜ ${signal.aiScore}%\n` +
+      `📉 **TREND**       ➜ ${signal.trend.label}\n` +
+      `⏰ **ENTRY**       ➜ ${getBDTime().display} (BD Time)\n` +
+      `⏳ **EXPIRY**      ➜ 1 Minute\n` +
+      `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+      `📌 **ANALYSIS**\n` +
+      signal.signals.map((s, i) => `  ${i+1}. ${s}`).join('\n') + '\n\n' +
+      `🛡️ **RISK MANAGEMENT**\n` +
+      `  • Maximum 1 Step MTG\n` +
+      `  • Never Overtrade\n\n` +
+      `💎 **OWNER**: @AkiL_xD 👾\n` +
       `⚠️ Trade at your own risk.`,
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Step 2: :40s পর্যন্ত অপেক্ষা ━━━
-    console.log(`⏳ Candle timing এর জন্য অপেক্ষা...`);
+    // ━━━ Step 2: Wait for timing ━━━
+    console.log(`⏳ Waiting for candle timing...`);
     await waitForSignalTiming();
 
-    // Entry candle time বের করো
     const nowBD = new Date(Date.now() + 6 * 60 * 60 * 1000);
     const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
     const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
@@ -566,13 +803,12 @@ async function sendSignalAndGetResult(bot, signal) {
 
     console.log(`📡 Signal timing! Entry: ${entryTime}`);
 
-    // ━━━ Step 3: CALL / PUT Sticker ONLY (No SureShot before result) ━━━
+    // ━━━ Step 3: Direction Sticker ━━━
     const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
     await safeSendSticker(bot, dirSticker);
 
     console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
 
-    // Entry price নাও
     let entryPrice = signal.currentPrice;
     try {
       entryPrice = await getCurrentPrice(signal.symbol);
@@ -580,12 +816,24 @@ async function sendSignalAndGetResult(bot, signal) {
       console.log('Entry price refresh failed, using cached.');
     }
 
-    // ━━━ Step 4: Candle Close অপেক্ষা ━━━
-    console.log(`⏳ Candle close এর জন্য অপেক্ষা...`);
+    // ━━━ Step 4: Live Price Update ━━━
+    await safeSendMessage(bot,
+      `💹 **LIVE PRICE UPDATE**\n\n` +
+      `📊 ${signal.symbol}\n` +
+      `💰 Current: ${entryPrice.toFixed(5)}\n` +
+      `📈 High: ${(entryPrice * 1.002).toFixed(5)}\n` +
+      `📉 Low: ${(entryPrice * 0.998).toFixed(5)}\n` +
+      `⚡ Volatility: ${(signal.volatility * 100).toFixed(2)}%\n\n` +
+      `⏰ Entry: ${entryTime}`,
+      { parse_mode: 'Markdown' }
+    );
+
+    // ━━━ Step 5: Wait for candle close ━━━
+    console.log(`⏳ Waiting for candle close...`);
     await waitForCandleClose();
     await sleep(1500);
 
-    // ━━━ Step 5: Exit Price ━━━
+    // ━━━ Step 6: Exit Price ━━━
     let exitPrice = entryPrice;
     try {
       exitPrice = await getCurrentPrice(signal.symbol);
@@ -593,26 +841,32 @@ async function sendSignalAndGetResult(bot, signal) {
       console.log('Exit price error: ' + e.message);
     }
 
-    // ━━━ Step 6: WIN / LOSS (SureShot shown ONLY on WIN) ━━━
+    // ━━━ Step 7: Result ━━━
     const isWin = signal.direction === 'UP'
       ? exitPrice > entryPrice
       : exitPrice < entryPrice;
 
     console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
 
+    // Track result
+    lastResults.push(isWin);
+    if (lastResults.length > 10) lastResults.shift();
+    tracker.addResult(signal.symbol, signal.direction, isWin);
+
     if (isWin) {
-      // ✅ SURESHOT sticker ONLY shown after confirmed WIN
       await safeSendSticker(bot, STICKERS.SURESHOT);
       await sleep(600);
       await safeSendMessage(bot,
-        `✅ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
+        `✅ **SIGNAL RESULT : WIN**\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
-        `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
-        `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
-        `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : WIN ✅\n` +
+        `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
+        `🎯 **Direction**: ${dirLabel}\n` +
+        `📈 **Result**   : WIN ✅\n` +
+        `💰 **Profit**   : +${((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)}%\n` +
         `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `🎯 SURESHOT ✅\n\n` +
-        `💎 𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿 : @AkiL_xD`,
+        `🎯 **SURESHOT** ✅\n\n` +
+        `📊 **Today Stats**: ${tracker.getTodayStats().wins}W / ${tracker.getTodayStats().losses}L\n\n` +
+        `💎 **OWNER**: @AkiL_xD 👾`,
         { parse_mode: 'Markdown' }
       );
     } else {
@@ -620,13 +874,16 @@ async function sendSignalAndGetResult(bot, signal) {
       await safeSendSticker(bot, mtgSticker);
       await sleep(600);
       await safeSendMessage(bot,
-        `❌ 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧 : LOSS\n\n` +
+        `❌ **SIGNAL RESULT : LOSS**\n\n` +
         `━━━━━━━━━━━━━━━━━━━\n` +
-        `📊 𝗔𝘀𝘀𝗲𝘁    : ${signal.symbol} ${flag}\n` +
-        `🎯 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻: ${dirLabel}\n` +
-        `📈 𝗥𝗲𝘀𝘂𝗹𝘁   : LOSS ❌\n` +
+        `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
+        `🎯 **Direction**: ${dirLabel}\n` +
+        `📈 **Result**   : LOSS ❌\n` +
+        `📉 **Loss**     : ${((entryPrice - exitPrice) / entryPrice * 100).toFixed(2)}%\n` +
         `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `💪 Wait a recovery signal`,
+        `💪 **Wait for recovery signal**\n\n` +
+        `📊 **Today Stats**: ${tracker.getTodayStats().wins}W / ${tracker.getTodayStats().losses}L\n\n` +
+        `💎 **OWNER**: @AkiL_xD 👾`,
         { parse_mode: 'Markdown' }
       );
     }
@@ -635,20 +892,17 @@ async function sendSignalAndGetResult(bot, signal) {
 
   } catch (error) {
     console.error(`❌ Signal error for ${signal.symbol}: ${error.message}`);
-    // Don't remove from sentSignals - we already tried to send it
     return null;
   }
 }
 
-// ─────────────────────────────────────────
-// ✅ MAIN SESSION RUNNER (IMPROVED LOCKING)
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🏁 MAIN SESSION RUNNER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function runSession(bot, sessionName, isManual = false) {
-  // Generate session key to prevent duplicate sessions
   const sessionKey = generateSessionKey(sessionName);
 
-  // Check if this session was already completed recently (within 25 minutes)
   if (!isManual && completedSessions.has(sessionKey)) {
     const lastRun = completedSessions.get(sessionKey);
     const timeSince = Date.now() - lastRun;
@@ -658,7 +912,6 @@ async function runSession(bot, sessionName, isManual = false) {
     }
   }
 
-  // Try to acquire session lock
   if (!acquireSessionLock(sessionName)) {
     console.log(`⚠️ ${sessionName} — another session is running, skipping.`);
     return { started: false, reason: 'already_running' };
@@ -666,34 +919,28 @@ async function runSession(bot, sessionName, isManual = false) {
 
   try {
     const { display, hStr, mStr } = getBDTime();
-    console.log(`🏁 ${sessionName} Session শুরু — BD: ${hStr}:${mStr}`);
+    console.log(`🏁 ${sessionName} Session Started — BD: ${hStr}:${mStr}`);
 
-    // Mark session as started
     completedSessions.set(sessionKey, Date.now());
 
-    // ━━━ Session Start Sticker ━━━
     await safeSendSticker(bot, STICKERS.SESSION_START);
     await sleep(1500);
 
-    // ━━━ Opening Message ━━━
     await safeSendMessage(bot,
-      `🏁 *𝗤𝘅 𝗔𝗜 𝗢𝘄𝗻𝗲𝗿*\n\n` +
-      `📈 সবাই Ready থাকুন\n\n` +
-      `⏰ সময়: ${display} (BD Time)\n\n` +
-      `🎯 ভালো সেটআপ পাওয়া গেলে সিগন্যাল ডিরেকশন দেওয়া হবে\n\n` +
-      `সবাই অপেক্ষা করুন অবশ্যই Money management এবং risk management ফলো করবেন`,
+      `🏁 **QX AI LIVE V5.0**\n\n` +
+      `📈 Everyone stay ready!\n\n` +
+      `⏰ Time: ${display} (BD Time)\n` +
+      `📊 Session: ${getTradingSessionName()}\n\n` +
+      `🎯 Best signals coming soon!\n` +
+      `💰 Trade with proper risk management.`,
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ ২ মিনিট অপেক্ষা ━━━
     await sleep(2 * 60 * 1000);
-
-    // ━━━ Are You Ready Sticker ━━━
     await safeSendSticker(bot, STICKERS.ARE_YOU_READY);
     await sleep(3000);
 
-    // ━━━ Session Loop ━━━
-    const SESSION_DURATION = 30 * 60 * 1000; // ৩০ মিনিট
+    const SESSION_DURATION = 30 * 60 * 1000;
     const sessionStart = Date.now();
     let signalCount = 0;
     const MAX_SIGNALS = 5;
@@ -703,7 +950,6 @@ async function runSession(bot, sessionName, isManual = false) {
       Date.now() - sessionStart < SESSION_DURATION &&
       signalCount < MAX_SIGNALS
     ) {
-      // Check if lock is still valid
       if (!sessionRunning) {
         console.log(`⚠️ Session lock lost, stopping session`);
         break;
@@ -712,67 +958,64 @@ async function runSession(bot, sessionName, isManual = false) {
       const timeLeft = Math.round((SESSION_DURATION - (Date.now() - sessionStart)) / 60000);
       console.log(`🔍 Scanning... Signal: ${signalCount}/${MAX_SIGNALS} | Time left: ${timeLeft}min`);
 
-      // Best Pair খোঁজো
       let best = null;
       try {
         best = await findBestPair();
       } catch (e) {
         console.error(`❌ Error finding best pair: ${e.message}`);
-        await sleep(60000); // Wait 1 minute on error
+        await sleep(60000);
         continue;
       }
 
       if (!best) {
-        console.log('⏭️ Valid signal নেই, ৩ মিনিট পরে retry...');
+        console.log('⏭️ No valid signal, retrying in 3 min...');
         await sleep(3 * 60 * 1000);
         continue;
       }
 
-      // প্রথম signal না হলে NEXT_ONE sticker
       if (!isFirstSignal) {
         await safeSendSticker(bot, STICKERS.NEXT_ONE);
         await sleep(2000);
       }
       isFirstSignal = false;
 
-      // Signal পাঠাও ও result নাও
       try {
-        const result = await sendSignalAndGetResult(bot, best);
+        const result = await sendProSignal(bot, best);
         if (result !== null) {
           signalCount++;
         }
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
-        // Continue with next signal instead of stopping
       }
 
-      // ৫ মিনিট ঘুম
       if (
         signalCount < MAX_SIGNALS &&
         Date.now() - sessionStart < SESSION_DURATION
       ) {
-        console.log(`😴 ৫ মিনিট অপেক্ষা...`);
+        console.log(`😴 Waiting 5 minutes...`);
         await sleep(5 * 60 * 1000);
       }
     }
 
-    // ━━━ Session Close ━━━
     await sleep(2000);
     await safeSendSticker(bot, STICKERS.SESSION_CLOSE);
     await sleep(800);
 
     const { display: endDisplay } = getBDTime();
+    const statsMsg = tracker.getStatsMessage();
+
     await safeSendMessage(bot,
-      `🏁 *${sessionName} Session শেষ হয়েছে!*\n\n` +
-      `⏰ সময়: ${endDisplay} (BD Time)\n` +
-      `📊 *Total Signals:* ${signalCount}\n\n` +
-      `🙏 সবাইকে ধন্যবাদ!\n` +
-      `💪 পরের session এ আবার দেখা হবে।\n\n` +
+      `🏁 **${sessionName} Session Ended!**\n\n` +
+      `⏰ Time: ${endDisplay} (BD Time)\n` +
+      `📊 **Total Signals:** ${signalCount}\n\n` +
+      `${statsMsg}\n\n` +
+      `🙏 Thanks everyone!\n` +
+      `💪 See you next session.\n\n` +
       `⚠️ Always trade at your own risk.`,
       { parse_mode: 'Markdown' }
     );
 
-    console.log(`✅ ${sessionName} Session শেষ | Total: ${signalCount}`);
+    console.log(`✅ ${sessionName} Session Ended | Total: ${signalCount}`);
     return { started: true, signalCount };
 
   } catch (err) {
@@ -780,26 +1023,23 @@ async function runSession(bot, sessionName, isManual = false) {
     throw err;
   } finally {
     releaseSessionLock();
-    // Cleanup old entries
     cleanupOldEntries();
   }
 }
 
-// ─────────────────────────────────────────
-// ✅ AUTO SCHEDULER (SINGLETON - PREVENTS DUPLICATE INTERVALS)
-// ─────────────────────────────────────────
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ⏰ AUTO SCHEDULER (UPGRADED)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 module.exports = function (bot) {
-  // Prevent multiple scheduler initializations
   if (schedulerInitialized) {
     console.log('⚠️ Scheduler already initialized, skipping duplicate initialization');
     return;
   }
 
   schedulerInitialized = true;
-  console.log('✅ Session scheduler started!');
+  console.log('✅ Session scheduler started! (v5.0 Pro)');
 
-  // Clear any existing interval (safety measure)
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
     schedulerInterval = null;
@@ -807,16 +1047,16 @@ module.exports = function (bot) {
 
   schedulerInterval = setInterval(async () => {
     try {
-      const { h, m, s } = getBDTime();
+      const { h, m, s, dateKey } = getBDTime();
 
-      // Morning Reminder — ৯:৩০
-      if (h === 9 && m === 30 && s < 10) {
+      // ━━━ Morning Reminder — ১১:৩০ ━━━
+      if (h === 11 && m === 30 && s < 10) {
         const reminderKey = generateReminderKey('morning_reminder');
         if (!sentReminders.has(reminderKey)) {
           sentReminders.set(reminderKey, Date.now());
           await safeSendMessage(bot,
-            `⏰ *Morning Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
-            `🕙 সকাল ১০:০০ টায় শুরু হবে\n` +
+            `⏰ **Morning Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
+            `🕙 ১২:০০ টায় শুরু হবে (BD Time)\n` +
             `📊 সবাই রেডি থাকুন! ✅\n\n` +
             `💹 আজকের Best Signals নিয়ে আসছি!`,
             { parse_mode: 'Markdown' }
@@ -824,8 +1064,8 @@ module.exports = function (bot) {
         }
       }
 
-      // Morning Session — ১০:০০
-      if (h === 10 && m === 0 && s < 10) {
+      // ━━━ Morning Session — ১২:০০ (NEW) ━━━
+      if (h === 12 && m === 0 && s < 10) {
         const sessionKey = generateSessionKey('🌅 Morning');
         if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
           runSession(bot, '🌅 Morning', false).catch(err => {
@@ -834,14 +1074,39 @@ module.exports = function (bot) {
         }
       }
 
-      // Evening Reminder — ২০:৩০
+      // ━━━ London Reminder — ১৫:৩০ ━━━
+      if (h === 15 && m === 30 && s < 10) {
+        const reminderKey = generateReminderKey('london_reminder');
+        if (!sentReminders.has(reminderKey)) {
+          sentReminders.set(reminderKey, Date.now());
+          await safeSendMessage(bot,
+            `⏰ **London Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
+            `🕙 ৪:০০ টায় শুরু হবে (BD Time)\n` +
+            `📊 সবাই রেডি থাকুন! ✅\n\n` +
+            `💹 London Session এর Best Signals নিয়ে আসছি!`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      }
+
+      // ━━━ London Session — ১৬:০০ (NEW) ━━━
+      if (h === 16 && m === 0 && s < 10) {
+        const sessionKey = generateSessionKey('🇬🇧 London');
+        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
+          runSession(bot, '🇬🇧 London', false).catch(err => {
+            console.error('London session error:', err.message);
+          });
+        }
+      }
+
+      // ━━━ Evening Reminder — ২০:৩০ ━━━
       if (h === 20 && m === 30 && s < 10) {
         const reminderKey = generateReminderKey('evening_reminder');
         if (!sentReminders.has(reminderKey)) {
           sentReminders.set(reminderKey, Date.now());
           await safeSendMessage(bot,
-            `🌙 *Evening Session শুরু হবে ৩০ মিনিট পরে!*\n\n` +
-            `🕙 রাত ৯:০০ টায় শুরু হবে\n` +
+            `🌙 **Evening Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
+            `🕙 রাত ৯:০০ টায় শুরু হবে (BD Time)\n` +
             `📊 সবাই রেডি থাকুন! ✅\n\n` +
             `💹 Evening এর Best Signals নিয়ে আসছি!`,
             { parse_mode: 'Markdown' }
@@ -849,7 +1114,7 @@ module.exports = function (bot) {
         }
       }
 
-      // Evening Session — ২১:০০
+      // ━━━ Evening Session — ২১:০০ ━━━
       if (h === 21 && m === 0 && s < 10) {
         const sessionKey = generateSessionKey('🌙 Evening');
         if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
@@ -857,6 +1122,42 @@ module.exports = function (bot) {
             console.error('Evening session error:', err.message);
           });
         }
+      }
+
+      // ━━━ NY Session Reminder — ২২:৩০ ━━━
+      if (h === 22 && m === 30 && s < 10) {
+        const reminderKey = generateReminderKey('ny_reminder');
+        if (!sentReminders.has(reminderKey)) {
+          sentReminders.set(reminderKey, Date.now());
+          await safeSendMessage(bot,
+            `🗽 **NY Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
+            `🕙 রাত ১১:০০ টায় শুরু হবে (BD Time)\n` +
+            `📊 সবাই রেডি থাকুন! ✅\n\n` +
+            `💹 NY Session এর Best Signals নিয়ে আসছি!`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+      }
+
+      // ━━━ NY Session — ২৩:০০ (NEW) ━━━
+      if (h === 23 && m === 0 && s < 10) {
+        const sessionKey = generateSessionKey('🗽 NY');
+        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
+          runSession(bot, '🗽 NY', false).catch(err => {
+            console.error('NY session error:', err.message);
+          });
+        }
+      }
+
+      // ━━━ Daily Stats at midnight ━━━
+      if (h === 0 && m === 0 && s < 10) {
+        const statsMsg = tracker.getStatsMessage();
+        await safeSendMessage(bot,
+          `📊 **Daily Performance Report**\n\n` +
+          `${statsMsg}\n\n` +
+          `📅 Date: ${dateKey}`,
+          { parse_mode: 'Markdown' }
+        );
       }
 
       // Cleanup old entries every hour
@@ -870,11 +1171,13 @@ module.exports = function (bot) {
   }, 5000);
 };
 
-// ✅ Admin manual control (with isManual flag)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📤 EXPORTS
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 module.exports.runSession = (bot, sessionName) => runSession(bot, sessionName, true);
 module.exports.isSessionRunning = () => sessionRunning;
-
-// ✅ Cleanup function for graceful shutdown
+module.exports.getStats = () => tracker.getStatsMessage();
 module.exports.cleanup = () => {
   if (schedulerInterval) {
     clearInterval(schedulerInterval);
