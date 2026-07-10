@@ -1,7 +1,8 @@
-// session.js - Qx AI Predictor VIP Session (Pro Version v5.0)
+// session.js - Qx AI Predictor VIP Session (Pro v5.0 + Chart)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
+const { ChartJSNodeCanvas } = require('chartjs-node-canvas');
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 📌 CONFIGURATION
@@ -10,7 +11,6 @@ const path = require('path');
 const CHANNEL_ID = '-1002268650240';
 const ADMIN_ID = 5724602667;
 
-// ✅ Updated Sticker file_ids
 const STICKERS = {
   SESSION_START: 'CAACAgUAAxkBAAIJJ2pPVxYeX2jAiTapeoNVCgMzIWtVAALnIgACWHFpVlTeidVCL8I3PAQ',
   SESSION_CLOSE: 'CAACAgUAAxkBAAIJKWpPVzu4tb4onZL4742yeSF5y0oLAAIJIAACc3VpVkNdndLynxI-PAQ',
@@ -23,7 +23,6 @@ const STICKERS = {
   SURESHOT:      'CAACAgUAAxkBAAIJN2pPWNbKDC9YJaHXrsaf1uO1aXmoAAKCJQACS0qAVqdi7137PDZoPAQ'
 };
 
-// ✅ Pro Trading Pairs with Priority
 const SESSION_PAIRS = [
   { symbol: 'EUR/USD', flag: '🇪🇺🇺🇸', priority: 1 },
   { symbol: 'GBP/USD', flag: '🇬🇧🇺🇸', priority: 2 },
@@ -35,29 +34,12 @@ const SESSION_PAIRS = [
   { symbol: 'AUD/USD', flag: '🇦🇺🇺🇸', priority: 8 }
 ];
 
-// ✅ Market Sessions (BD Time = GMT+6)
 const MARKET_SESSIONS = {
-  LONDON: {
-    OPEN: 14,
-    CLOSE: 23,
-    BEST_HOURS: [15, 16, 17, 18, 19, 20],
-    PAIRS: ['EUR/USD', 'GBP/USD', 'EUR/GBP', 'EUR/JPY', 'GBP/JPY']
-  },
-  NEWYORK: {
-    OPEN: 19,
-    CLOSE: 4,
-    BEST_HOURS: [20, 21, 22, 23, 0],
-    PAIRS: ['EUR/USD', 'GBP/USD', 'USD/JPY', 'USD/CHF']
-  },
-  TOKYO: {
-    OPEN: 6,
-    CLOSE: 15,
-    BEST_HOURS: [7, 8, 9, 10, 11],
-    PAIRS: ['USD/JPY', 'EUR/JPY', 'GBP/JPY', 'AUD/USD']
-  }
+  LONDON: { OPEN: 14, CLOSE: 23, BEST_HOURS: [15,16,17,18,19,20], PAIRS: ['EUR/USD','GBP/USD','EUR/GBP','EUR/JPY','GBP/JPY'] },
+  NEWYORK: { OPEN: 19, CLOSE: 4, BEST_HOURS: [20,21,22,23,0], PAIRS: ['EUR/USD','GBP/USD','USD/JPY','USD/CHF'] },
+  TOKYO: { OPEN: 6, CLOSE: 15, BEST_HOURS: [7,8,9,10,11], PAIRS: ['USD/JPY','EUR/JPY','GBP/JPY','AUD/USD'] }
 };
 
-// ✅ Trading Schedule (BD Time)
 const TRADING_SCHEDULE = [
   { start: 11, end: 14, name: 'Morning Momentum' },
   { start: 16, end: 20, name: 'London Session' },
@@ -71,75 +53,36 @@ const TRADING_SCHEDULE = [
 class PerformanceTracker {
   constructor() {
     this.statsFile = path.join(__dirname, 'stats.json');
-    this.stats = {
-      total: 0,
-      wins: 0,
-      losses: 0,
-      winRate: 0,
-      sessions: {},
-      pairs: {},
-      daily: {}
-    };
+    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {} };
     this.loadStats();
   }
-
   loadStats() {
-    try {
-      if (fs.existsSync(this.statsFile)) {
-        this.stats = JSON.parse(fs.readFileSync(this.statsFile));
-      }
-    } catch (e) {
-      console.log('📊 No stats file found, creating new...');
-    }
+    try { if (fs.existsSync(this.statsFile)) this.stats = JSON.parse(fs.readFileSync(this.statsFile)); } catch(e) {}
   }
-
   saveStats() {
-    try {
-      fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2));
-    } catch (e) {
-      console.log('⚠️ Failed to save stats:', e.message);
-    }
+    try { fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2)); } catch(e) {}
   }
-
   addResult(symbol, direction, isWin) {
     const today = getBDTime().dateKey;
-    
     this.stats.total++;
-    if (isWin) this.stats.wins++;
-    else this.stats.losses++;
+    if (isWin) this.stats.wins++; else this.stats.losses++;
     this.stats.winRate = (this.stats.wins / this.stats.total * 100);
-
-    if (!this.stats.pairs[symbol]) {
-      this.stats.pairs[symbol] = { wins: 0, losses: 0 };
-    }
-    if (isWin) this.stats.pairs[symbol].wins++;
-    else this.stats.pairs[symbol].losses++;
-
-    if (!this.stats.daily[today]) {
-      this.stats.daily[today] = { wins: 0, losses: 0 };
-    }
-    if (isWin) this.stats.daily[today].wins++;
-    else this.stats.daily[today].losses++;
-
+    if (!this.stats.pairs[symbol]) this.stats.pairs[symbol] = { wins: 0, losses: 0 };
+    if (isWin) this.stats.pairs[symbol].wins++; else this.stats.pairs[symbol].losses++;
+    if (!this.stats.daily[today]) this.stats.daily[today] = { wins: 0, losses: 0 };
+    if (isWin) this.stats.daily[today].wins++; else this.stats.daily[today].losses++;
     this.saveStats();
   }
-
   getStatsMessage() {
     const { total, wins, losses, winRate, pairs } = this.stats;
     const today = getBDTime().dateKey;
     const daily = this.stats.daily[today] || { wins: 0, losses: 0 };
-    
     let pairStats = '';
-    const sortedPairs = Object.entries(pairs)
-      .sort((a, b) => (b[1].wins + b[1].losses) - (a[1].wins + a[1].losses));
-    
-    for (const [symbol, data] of sortedPairs.slice(0, 5)) {
-      const rate = data.wins + data.losses > 0 
-        ? (data.wins / (data.wins + data.losses) * 100) 
-        : 0;
+    const sortedPairs = Object.entries(pairs).sort((a,b) => (b[1].wins+b[1].losses) - (a[1].wins+a[1].losses));
+    for (const [symbol, data] of sortedPairs.slice(0,5)) {
+      const rate = data.wins+data.losses > 0 ? (data.wins/(data.wins+data.losses)*100) : 0;
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
-
     return `
 📊 **QX AI PERFORMANCE v5.0**
 
@@ -158,12 +101,19 @@ ${pairStats || '  No data yet'}
 💎 **OWNER**: @AkiL_xD 👾
     `;
   }
+  getTodayStats() {
+    const today = getBDTime().dateKey;
+    const daily = this.stats.daily[today] || { wins: 0, losses: 0 };
+    const totalToday = daily.wins + daily.losses;
+    const rate = totalToday > 0 ? (daily.wins / totalToday * 100) : 0;
+    return { ...daily, total: totalToday, rate };
+  }
 }
 
 const tracker = new PerformanceTracker();
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ SESSION STATE MANAGEMENT
+// ⏰ SESSION STATE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 let sessionRunning = false;
@@ -171,9 +121,7 @@ let sessionLockTimestamp = 0;
 let currentSessionId = null;
 let schedulerInitialized = false;
 let schedulerInterval = null;
-let lossStreak = 0;
 const MAX_LOSS_STREAK = 2;
-
 const sentSignals = new Map();
 const completedSessions = new Map();
 const sentReminders = new Map();
@@ -181,81 +129,57 @@ const SESSION_LOCK_TIMEOUT = 45 * 60 * 1000;
 const lastResults = [];
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🛠️ HELPER FUNCTIONS
+// 🛠️ HELPERS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function getBDTime() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
-  const h = bd.getUTCHours();
-  const m = bd.getUTCMinutes();
-  const s = bd.getUTCSeconds();
+  const h = bd.getUTCHours(), m = bd.getUTCMinutes(), s = bd.getUTCSeconds();
   const period = h >= 12 ? 'PM' : 'AM';
   const h12 = h % 12 || 12;
   return {
     h, m, s,
-    hStr: String(h).padStart(2, '0'),
-    mStr: String(m).padStart(2, '0'),
-    sStr: String(s).padStart(2, '0'),
-    display: `${h12}:${String(m).padStart(2, '0')} ${period}`,
+    hStr: String(h).padStart(2,'0'),
+    mStr: String(m).padStart(2,'0'),
+    sStr: String(s).padStart(2,'0'),
+    display: `${h12}:${String(m).padStart(2,'0')} ${period}`,
     dateKey: `${bd.getUTCFullYear()}-${String(bd.getUTCMonth()+1).padStart(2,'0')}-${String(bd.getUTCDate()).padStart(2,'0')}`
   };
 }
 
-function sleep(ms) {
-  return new Promise(r => setTimeout(r, ms));
-}
-
-function generateSessionKey(sessionName) {
-  const { dateKey, h } = getBDTime();
-  return `${dateKey}-${sessionName}-${h}`;
-}
-
-function generateSignalKey(symbol, direction) {
-  const { dateKey, h, m } = getBDTime();
-  return `${dateKey}-${h}-${Math.floor(m / 5)}-${symbol}-${direction}`;
-}
-
-function generateReminderKey(type) {
-  const { dateKey, h, m } = getBDTime();
-  return `${dateKey}-${type}-${h}-${m}`;
-}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function generateSessionKey(name) { const { dateKey, h } = getBDTime(); return `${dateKey}-${name}-${h}`; }
+function generateSignalKey(symbol, dir) { const { dateKey, h, m } = getBDTime(); return `${dateKey}-${h}-${Math.floor(m/5)}-${symbol}-${dir}`; }
+function generateReminderKey(type) { const { dateKey, h, m } = getBDTime(); return `${dateKey}-${type}-${h}-${m}`; }
 
 function cleanupOldEntries() {
   const now = Date.now();
   const maxAge = 2 * 60 * 60 * 1000;
-  for (const [key, timestamp] of sentSignals.entries()) {
-    if (now - timestamp > maxAge) sentSignals.delete(key);
-  }
-  for (const [key, timestamp] of completedSessions.entries()) {
-    if (now - timestamp > maxAge) completedSessions.delete(key);
-  }
-  for (const [key, timestamp] of sentReminders.entries()) {
-    if (now - timestamp > maxAge) sentReminders.delete(key);
-  }
+  for (const [key, ts] of sentSignals) if (now - ts > maxAge) sentSignals.delete(key);
+  for (const [key, ts] of completedSessions) if (now - ts > maxAge) completedSessions.delete(key);
+  for (const [key, ts] of sentReminders) if (now - ts > maxAge) sentReminders.delete(key);
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔒 SESSION LOCK MANAGEMENT
+// 🔒 SESSION LOCK
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function acquireSessionLock(sessionName) {
+function acquireSessionLock(name) {
   const now = Date.now();
-  if (sessionRunning && sessionLockTimestamp > 0) {
-    if (now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
-      console.log(`⚠️ Session lock timeout detected, releasing stale lock`);
-      releaseSessionLock();
-    }
+  if (sessionRunning && sessionLockTimestamp > 0 && now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
+    console.log('⚠️ Stale lock, releasing');
+    releaseSessionLock();
   }
   if (sessionRunning) return false;
   sessionRunning = true;
   sessionLockTimestamp = now;
-  currentSessionId = `${sessionName}-${now}`;
-  console.log(`🔒 Session lock acquired: ${currentSessionId}`);
+  currentSessionId = `${name}-${now}`;
+  console.log(`🔒 Lock acquired: ${currentSessionId}`);
   return true;
 }
 
 function releaseSessionLock() {
-  console.log(`🔓 Session lock released: ${currentSessionId}`);
+  console.log(`🔓 Lock released: ${currentSessionId}`);
   sessionRunning = false;
   sessionLockTimestamp = 0;
   currentSessionId = null;
@@ -265,7 +189,7 @@ function isSessionLocked() {
   if (!sessionRunning) return false;
   const now = Date.now();
   if (sessionLockTimestamp > 0 && now - sessionLockTimestamp > SESSION_LOCK_TIMEOUT) {
-    console.log(`⚠️ Stale session lock detected`);
+    console.log('⚠️ Stale lock detected');
     return false;
   }
   return true;
@@ -273,57 +197,32 @@ function isSessionLocked() {
 
 function isGoodTradingTime() {
   const { h } = getBDTime();
-  for (const slot of TRADING_SCHEDULE) {
-    if (h >= slot.start && h < slot.end) {
-      return true;
-    }
-  }
+  for (const slot of TRADING_SCHEDULE) if (h >= slot.start && h < slot.end) return true;
   return false;
 }
 
 function getActiveSessions() {
   const { h } = getBDTime();
   const active = [];
-  if (h >= MARKET_SESSIONS.LONDON.OPEN && h < MARKET_SESSIONS.LONDON.CLOSE) {
-    active.push('LONDON');
-  }
-  if (h >= MARKET_SESSIONS.NEWYORK.OPEN || h < MARKET_SESSIONS.NEWYORK.CLOSE) {
-    active.push('NEWYORK');
-  }
-  if (h >= MARKET_SESSIONS.TOKYO.OPEN && h < MARKET_SESSIONS.TOKYO.CLOSE) {
-    active.push('TOKYO');
-  }
+  if (h >= MARKET_SESSIONS.LONDON.OPEN && h < MARKET_SESSIONS.LONDON.CLOSE) active.push('LONDON');
+  if (h >= MARKET_SESSIONS.NEWYORK.OPEN || h < MARKET_SESSIONS.NEWYORK.CLOSE) active.push('NEWYORK');
+  if (h >= MARKET_SESSIONS.TOKYO.OPEN && h < MARKET_SESSIONS.TOKYO.CLOSE) active.push('TOKYO');
   return active;
 }
 
 function getTradingSessionName() {
   const { h } = getBDTime();
-  for (const slot of TRADING_SCHEDULE) {
-    if (h >= slot.start && h < slot.end) {
-      return slot.name;
-    }
-  }
+  for (const slot of TRADING_SCHEDULE) if (h >= slot.start && h < slot.end) return slot.name;
   return 'Off-Hours';
 }
 
 function shouldSkipPair(symbol) {
-  const activeSessions = getActiveSessions();
+  const active = getActiveSessions();
   const { h } = getBDTime();
-  
-  // Skip AUD/USD in morning
   if (h < 12 && symbol === 'AUD/USD') return true;
-  
-  // Session based filtering
-  if (activeSessions.includes('LONDON')) {
-    if (!MARKET_SESSIONS.LONDON.PAIRS.includes(symbol)) return true;
-  }
-  if (activeSessions.includes('NEWYORK')) {
-    if (!MARKET_SESSIONS.NEWYORK.PAIRS.includes(symbol)) return true;
-  }
-  if (activeSessions.includes('TOKYO')) {
-    if (!MARKET_SESSIONS.TOKYO.PAIRS.includes(symbol)) return true;
-  }
-  
+  if (active.includes('LONDON') && !MARKET_SESSIONS.LONDON.PAIRS.includes(symbol)) return true;
+  if (active.includes('NEWYORK') && !MARKET_SESSIONS.NEWYORK.PAIRS.includes(symbol)) return true;
+  if (active.includes('TOKYO') && !MARKET_SESSIONS.TOKYO.PAIRS.includes(symbol)) return true;
   return false;
 }
 
@@ -331,7 +230,7 @@ function checkLossStreak() {
   if (lastResults.length >= 3) {
     const losses = lastResults.filter(r => r === false).length;
     if (losses >= MAX_LOSS_STREAK) {
-      console.log(`⚠️ Loss streak detected (${losses} losses), pausing...`);
+      console.log(`⚠️ Loss streak (${losses}), pausing...`);
       return true;
     }
   }
@@ -344,11 +243,8 @@ function checkLossStreak() {
 
 async function safeSendSticker(bot, fileId, retries = 1) {
   for (let attempt = 1; attempt <= retries; attempt++) {
-    try {
-      await bot.sendSticker(CHANNEL_ID, fileId);
-      return true;
-    } catch (e) {
-      console.log(`⚠️ Sticker send failed (attempt ${attempt}): ${e.message}`);
+    try { await bot.sendSticker(CHANNEL_ID, fileId); return true; } catch(e) {
+      console.log(`⚠️ Sticker send failed (${attempt}): ${e.message}`);
       if (attempt < retries) await sleep(1000);
     }
   }
@@ -360,8 +256,21 @@ async function safeSendMessage(bot, text, options = {}, retries = 1) {
     try {
       const result = await bot.sendMessage(CHANNEL_ID, text, options);
       return result;
-    } catch (e) {
-      console.log(`⚠️ Message send failed (attempt ${attempt}): ${e.message}`);
+    } catch(e) {
+      console.log(`⚠️ Message send failed (${attempt}): ${e.message}`);
+      if (attempt < retries) await sleep(1000);
+    }
+  }
+  return null;
+}
+
+async function safeSendPhoto(bot, photo, caption = '', retries = 1) {
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const result = await bot.sendPhoto(CHANNEL_ID, photo, { caption });
+      return result;
+    } catch(e) {
+      console.log(`⚠️ Photo send failed (${attempt}): ${e.message}`);
       if (attempt < retries) await sleep(1000);
     }
   }
@@ -369,7 +278,7 @@ async function safeSendMessage(bot, text, options = {}, retries = 1) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 PRICE & CANDLE FUNCTIONS
+// 📊 PRICE & CANDLE
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function getCurrentPrice(symbol) {
@@ -384,16 +293,12 @@ async function getCandles(symbol, count = 50, interval = '1min') {
   const diffMinutes = (new Date() - lastCandleTime) / (60 * 1000);
   if (diffMinutes > 5) throw new Error('Stale data');
   return data.values.map(v => ({
-    open: +v.open,
-    high: +v.high,
-    low: +v.low,
-    close: +v.close,
-    volume: +v.volume || 0
+    open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0
   })).reverse();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 TECHNICAL ANALYSIS (All Indicators)
+// 📈 TECHNICAL ANALYSIS (all indicators)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
@@ -410,21 +315,15 @@ function calcEMA(candles, period) {
   if (candles.length < 2) return candles[0].close;
   const k = 2 / (period + 1);
   let ema = candles[0].close;
-  for (let i = 1; i < candles.length; i++) {
-    ema = candles[i].close * k + ema * (1 - k);
-  }
+  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
   return ema;
 }
 
-function calcMACD(candles) {
-  return calcEMA(candles, 12) - calcEMA(candles, 26);
-}
+function calcMACD(candles) { return calcEMA(candles, 12) - calcEMA(candles, 26); }
 
 function calcStochRSI(candles, period = 14) {
   const rsiArr = [];
-  for (let i = period; i < candles.length; i++) {
-    rsiArr.push(calcRSI(candles.slice(0, i + 1), period));
-  }
+  for (let i = period; i < candles.length; i++) rsiArr.push(calcRSI(candles.slice(0, i+1), period));
   if (rsiArr.length < period) return 50;
   const rec = rsiArr.slice(-period);
   const mn = Math.min(...rec), mx = Math.max(...rec);
@@ -435,29 +334,25 @@ function calcStochRSI(candles, period = 14) {
 function calcBB(candles, period = 20) {
   const p = Math.min(period, candles.length);
   const closes = candles.slice(-p).map(c => c.close);
-  const sma = closes.reduce((a, b) => a + b, 0) / p;
-  const std = Math.sqrt(closes.reduce((s, c) => s + Math.pow(c - sma, 2), 0) / p);
-  return { upper: sma + 2 * std, lower: sma - 2 * std, mid: sma };
+  const sma = closes.reduce((a,b) => a+b, 0) / p;
+  const std = Math.sqrt(closes.reduce((s,c) => s + Math.pow(c - sma, 2), 0) / p);
+  return { upper: sma + 2*std, lower: sma - 2*std, mid: sma };
 }
 
 function calcATR(candles, period = 14) {
   const trs = [];
   for (let i = 1; i < candles.length; i++) {
-    trs.push(Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i - 1].close),
-      Math.abs(candles[i].low - candles[i - 1].close)
-    ));
+    trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
   }
-  return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
+  return trs.slice(-period).reduce((a,b) => a+b, 0) / period;
 }
 
 function calcCCI(candles, period = 20) {
   const p = Math.min(period, candles.length);
   const slice = candles.slice(-p);
   const typicals = slice.map(c => (c.high + c.low + c.close) / 3);
-  const mean = typicals.reduce((a, b) => a + b, 0) / p;
-  const mad = typicals.reduce((s, t) => s + Math.abs(t - mean), 0) / p;
+  const mean = typicals.reduce((a,b) => a+b, 0) / p;
+  const mad = typicals.reduce((s,t) => s + Math.abs(t - mean), 0) / p;
   if (mad === 0) return 0;
   return (typicals[typicals.length - 1] - mean) / (0.015 * mad);
 }
@@ -473,20 +368,15 @@ function calcWilliamsR(candles, period = 14) {
 }
 
 function calcTrend(candles) {
-  const ema5 = calcEMA(candles, 5);
-  const ema10 = calcEMA(candles, 10);
-  const ema20 = calcEMA(candles, 20);
-  const ema50 = calcEMA(candles, 50);
+  const ema5 = calcEMA(candles, 5), ema10 = calcEMA(candles, 10), ema20 = calcEMA(candles, 20), ema50 = calcEMA(candles, 50);
   const last = candles[candles.length - 1].close;
   let up = 0, dn = 0;
-
   if (ema5 > ema20) up += 2; else dn += 2;
   if (ema10 > ema50) up += 2; else dn += 2;
   if (last > ema5) up += 1; else dn += 1;
   if (last > ema20) up += 1; else dn += 1;
   if (ema5 > ema10 && ema10 > ema20) up += 3;
   else if (ema5 < ema10 && ema10 < ema20) dn += 3;
-
   return {
     dir: up > dn ? 'UP' : 'DOWN',
     up, dn,
@@ -498,45 +388,29 @@ function calcTrend(candles) {
 function calcCandlePattern(candles) {
   const len = candles.length;
   if (len < 3) return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
-  const c = candles[len - 1];
-  const p = candles[len - 2];
-  const p2 = candles[len - 3];
+  const c = candles[len - 1], p = candles[len - 2], p2 = candles[len - 3];
   const body = Math.abs(c.close - c.open);
   const upWick = c.high - Math.max(c.close, c.open);
   const dnWick = Math.min(c.close, c.open) - c.low;
   const range = c.high - c.low || 0.0001;
-  const bull = c.close > c.open;
-  const bear = c.close < c.open;
+  const bull = c.close > c.open, bear = c.close < c.open;
 
-  if (bull && p.close < p.open && c.close > p.open && c.open < p.close)
-    return { pattern: 'Bullish Engulfing', dir: 'UP', str: 4 };
-  if (bear && p.close > p.open && c.open > p.close && c.close < p.open)
-    return { pattern: 'Bearish Engulfing', dir: 'DOWN', str: 4 };
-  if (dnWick > body * 2.5 && upWick < body * 0.5)
-    return { pattern: 'Bullish Pin Bar', dir: 'UP', str: 3 };
-  if (upWick > body * 2.5 && dnWick < body * 0.5)
-    return { pattern: 'Bearish Pin Bar', dir: 'DOWN', str: 3 };
-  if (p2.close < p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && bull)
-    return { pattern: 'Morning Star', dir: 'UP', str: 4 };
-  if (p2.close > p2.open && Math.abs(p.close - p.open) < Math.abs(p2.close - p2.open) * 0.3 && bear)
-    return { pattern: 'Evening Star', dir: 'DOWN', str: 4 };
-  if (bull && p.close > p.open && p2.close > p2.open && body > range * 0.6)
-    return { pattern: 'Three White Soldiers', dir: 'UP', str: 5 };
-  if (bear && p.close < p.open && p2.close < p2.open && body > range * 0.6)
-    return { pattern: 'Three Black Crows', dir: 'DOWN', str: 5 };
-  if (body < range * 0.1)
-    return { pattern: 'Doji', dir: 'NEUTRAL', str: 1 };
-  if (bull && upWick < body * 0.05 && dnWick < body * 0.05)
-    return { pattern: 'Bullish Marubozu', dir: 'UP', str: 3 };
-  if (bear && upWick < body * 0.05 && dnWick < body * 0.05)
-    return { pattern: 'Bearish Marubozu', dir: 'DOWN', str: 3 };
-
+  if (bull && p.close < p.open && c.close > p.open && c.open < p.close) return { pattern: 'Bullish Engulfing', dir: 'UP', str: 4 };
+  if (bear && p.close > p.open && c.open > p.close && c.close < p.open) return { pattern: 'Bearish Engulfing', dir: 'DOWN', str: 4 };
+  if (dnWick > body * 2.5 && upWick < body * 0.5) return { pattern: 'Bullish Pin Bar', dir: 'UP', str: 3 };
+  if (upWick > body * 2.5 && dnWick < body * 0.5) return { pattern: 'Bearish Pin Bar', dir: 'DOWN', str: 3 };
+  if (p2.close < p2.open && Math.abs(p.close-p.open) < Math.abs(p2.close-p2.open)*0.3 && bull) return { pattern: 'Morning Star', dir: 'UP', str: 4 };
+  if (p2.close > p2.open && Math.abs(p.close-p.open) < Math.abs(p2.close-p2.open)*0.3 && bear) return { pattern: 'Evening Star', dir: 'DOWN', str: 4 };
+  if (bull && p.close > p.open && p2.close > p2.open && body > range * 0.6) return { pattern: 'Three White Soldiers', dir: 'UP', str: 5 };
+  if (bear && p.close < p.open && p2.close < p2.open && body > range * 0.6) return { pattern: 'Three Black Crows', dir: 'DOWN', str: 5 };
+  if (body < range * 0.1) return { pattern: 'Doji', dir: 'NEUTRAL', str: 1 };
+  if (bull && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bullish Marubozu', dir: 'UP', str: 3 };
+  if (bear && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bearish Marubozu', dir: 'DOWN', str: 3 };
   return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
 }
 
 function calcSupportResistance(candles) {
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
+  const highs = candles.map(c => c.high), lows = candles.map(c => c.low);
   const resistance = Math.max(...highs.slice(-20));
   const support = Math.min(...lows.slice(-20));
   const last = candles[candles.length - 1].close;
@@ -546,82 +420,48 @@ function calcSupportResistance(candles) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 FULL ANALYSIS (UPGRADED)
+// 🔍 FULL ANALYSIS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function analyzeSymbol(symbol) {
   const candles = await getCandles(symbol, 50);
   const h4Candles = await getCandles(symbol, 100, '5min');
   
-  const rsi = calcRSI(candles);
-  const rsi7 = calcRSI(candles, 7);
-  const stoch = calcStochRSI(candles);
-  const macd = calcMACD(candles);
-  const bb = calcBB(candles);
-  const atr = calcATR(candles);
-  const cci = calcCCI(candles);
-  const wr = calcWilliamsR(candles);
-  const trend = calcTrend(candles);
-  const h4Trend = calcTrend(h4Candles);
-  const cp = calcCandlePattern(candles);
-  const sr = calcSupportResistance(candles);
+  const rsi = calcRSI(candles), rsi7 = calcRSI(candles, 7);
+  const stoch = calcStochRSI(candles), macd = calcMACD(candles);
+  const bb = calcBB(candles), atr = calcATR(candles);
+  const cci = calcCCI(candles), wr = calcWilliamsR(candles);
+  const trend = calcTrend(candles), h4Trend = calcTrend(h4Candles);
+  const cp = calcCandlePattern(candles), sr = calcSupportResistance(candles);
   const last = candles[candles.length - 1].close;
 
   let up = 0, dn = 0;
   const signals = [];
 
-  // RSI
-  if (rsi < 30) { up += 3; signals.push('RSI Oversold'); }
-  else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
-  else if (rsi < 45) up += 1;
-  else if (rsi > 55) dn += 1;
+  if (rsi < 30) { up += 3; signals.push('RSI Oversold'); } else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
+  else if (rsi < 45) up += 1; else if (rsi > 55) dn += 1;
 
-  // Fast RSI
-  if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); }
-  else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
+  if (rsi7 < 25) { up += 2; signals.push('Fast RSI Oversold'); } else if (rsi7 > 75) { dn += 2; signals.push('Fast RSI Overbought'); }
 
-  // StochRSI
-  if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); }
-  else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
+  if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); } else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
 
-  // MACD
-  if (macd > 0) { up += 2; signals.push('MACD Bullish'); }
-  else { dn += 2; signals.push('MACD Bearish'); }
+  if (macd > 0) { up += 2; signals.push('MACD Bullish'); } else { dn += 2; signals.push('MACD Bearish'); }
 
-  // Bollinger Bands
-  if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); }
-  else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
+  if (last <= bb.lower) { up += 3; signals.push('Price at Lower BB'); } else if (last >= bb.upper) { dn += 3; signals.push('Price at Upper BB'); }
 
-  // CCI
-  if (cci < -100) { up += 2; signals.push('CCI Oversold'); }
-  else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
+  if (cci < -100) { up += 2; signals.push('CCI Oversold'); } else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
 
-  // Williams %R
-  if (wr < -80) { up += 2; signals.push('Williams %R Oversold'); }
-  else if (wr > -20) { dn += 2; signals.push('Williams %R Overbought'); }
+  if (wr < -80) { up += 2; signals.push('Williams %R Oversold'); } else if (wr > -20) { dn += 2; signals.push('Williams %R Overbought'); }
 
-  // Trend
-  up += trend.up;
-  dn += trend.dn;
-  if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
-  else signals.push('EMA Bearish Alignment');
+  up += trend.up; dn += trend.dn;
+  if (trend.dir === 'UP') signals.push('EMA Bullish Alignment'); else signals.push('EMA Bearish Alignment');
 
-  // Higher TF Trend
-  if (trend.dir === h4Trend.dir) {
-    up += 2;
-    signals.push('HTF Confirmation ✅');
-  } else {
-    dn += 2;
-    signals.push('HTF Mismatch ⚠️');
-  }
+  if (trend.dir === h4Trend.dir) { up += 2; signals.push('HTF Confirmation ✅'); } else { dn += 2; signals.push('HTF Mismatch ⚠️'); }
 
-  // Support/Resistance
   if (sr.nearSupport) { up += 3; signals.push('At Support Level ✅'); }
   if (sr.nearResistance) { dn += 3; signals.push('At Resistance Level ⚠️'); }
 
-  // Candle Pattern
-  if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); }
-  else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
+  if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); } else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
   const total = up + dn;
   const dominant = Math.max(up, dn);
@@ -640,34 +480,103 @@ async function analyzeSymbol(symbol) {
   const isValid = ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80;
 
   return {
-    symbol,
-    direction,
-    ratio,
-    aiScore,
-    trend,
-    h4Trend: h4Trend.dir,
-    signals: signals.slice(0, 5),
-    currentPrice: last,
-    volatility,
-    confidence,
-    isSureShot: aiScore >= 90,
-    isValid,
-    sr,
-    candles
+    symbol, direction, ratio, aiScore, trend, h4Trend: h4Trend.dir,
+    signals: signals.slice(0,5), currentPrice: last, volatility, confidence,
+    isSureShot: aiScore >= 90, isValid, sr, candles
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 BEST PAIR FINDER (UPGRADED)
+// 📊 CHART GENERATOR (Candlestick with Entry/Exit)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function findBestPair() {
-  if (!isGoodTradingTime()) {
+async function generateChart(symbol, candles, direction, entryPrice, exitPrice) {
+  try {
+    const width = 800, height = 450;
+    const chartJSNodeCanvas = new ChartJSNodeCanvas({ width, height });
+    const plotCandles = candles.slice(-30);
+    const labels = plotCandles.map((_, i) => `${i+1}m`);
+    
+    const data = {
+      labels: labels,
+      datasets: [{
+        label: symbol,
+        data: plotCandles.map((c, i) => ({
+          x: i,
+          y: [c.open, c.high, c.low, c.close]
+        })),
+        borderColor: direction === 'UP' ? '#00ff88' : '#ff4444',
+        backgroundColor: direction === 'UP' ? 'rgba(0,255,136,0.1)' : 'rgba(255,68,68,0.1)',
+      }]
+    };
+
+    const config = {
+      type: 'candlestick',
+      data: data,
+      options: {
+        responsive: true,
+        plugins: {
+          legend: { labels: { color: '#ffffff' } },
+          annotation: {
+            annotations: {
+              entryLine: {
+                type: 'line',
+                yMin: entryPrice,
+                yMax: entryPrice,
+                borderColor: 'rgba(255,215,0,0.8)',
+                borderWidth: 2,
+                borderDash: [6,4],
+                label: {
+                  content: '⬇️ ENTRY',
+                  enabled: true,
+                  position: 'start',
+                  backgroundColor: 'rgba(255,215,0,0.7)',
+                  color: '#000'
+                }
+              },
+              exitLine: {
+                type: 'line',
+                yMin: exitPrice,
+                yMax: exitPrice,
+                borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444',
+                borderWidth: 2,
+                borderDash: [6,4],
+                label: {
+                  content: exitPrice > entryPrice ? '✅ WIN' : '❌ LOSS',
+                  enabled: true,
+                  position: 'end',
+                  backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.8)' : 'rgba(255,68,68,0.8)',
+                  color: '#fff'
+                }
+              }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#aaa' } },
+          y: { ticks: { color: '#aaa' } }
+        }
+      }
+    };
+
+    const imageBuffer = await chartJSNodeCanvas.renderToBuffer(config);
+    return imageBuffer;
+  } catch (error) {
+    console.error('❌ Chart generation failed:', error.message);
+    return null;
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔍 BEST PAIR FINDER (with ignoreTime)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function findBestPair(ignoreTime = false) {
+  if (!ignoreTime && !isGoodTradingTime()) {
     console.log(`⏰ ${getTradingSessionName()} - Not good trading time`);
     return null;
   }
-
-  if (checkLossStreak()) {
+  if (!ignoreTime && checkLossStreak()) {
     console.log('⏸️ Loss streak detected, pausing...');
     return null;
   }
@@ -678,21 +587,16 @@ async function findBestPair() {
 
   for (const pair of SESSION_PAIRS) {
     try {
-      if (shouldSkipPair(pair.symbol)) {
-        console.log(`⏭️ Skipping ${pair.symbol} - Not suitable for current session`);
+      if (!ignoreTime && shouldSkipPair(pair.symbol)) {
+        console.log(`⏭️ Skipping ${pair.symbol} - Not suitable`);
         continue;
       }
-
       const result = await analyzeSymbol(pair.symbol);
       result.flag = pair.flag;
       result.priority = pair.priority;
-
       console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | Vol=${(result.volatility*100).toFixed(2)}%`);
 
-      if (!result.isValid) {
-        await sleep(800);
-        continue;
-      }
+      if (!result.isValid) { await sleep(800); continue; }
 
       const priorityBonus = Math.max(0, (6 - pair.priority) * 0.5);
       const finalScore = result.aiScore + priorityBonus;
@@ -701,14 +605,12 @@ async function findBestPair() {
         best = result;
         best.finalScore = finalScore;
       }
-
       await sleep(800);
     } catch (e) {
       console.log(`❌ ${pair.symbol}: ${e.message}`);
       await sleep(500);
     }
   }
-
   return best;
 }
 
@@ -721,15 +623,9 @@ function waitForSignalTiming() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 40 && s <= 43) {
-        clearInterval(check);
-        resolve();
-      }
+      if (s >= 40 && s <= 43) { clearInterval(check); resolve(); }
     }, 500);
-    setTimeout(() => {
-      clearInterval(check);
-      resolve();
-    }, 30000);
+    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
 }
 
@@ -738,26 +634,20 @@ function waitForCandleClose() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 58) {
-        clearInterval(check);
-        resolve();
-      }
+      if (s >= 58) { clearInterval(check); resolve(); }
     }, 500);
-    setTimeout(() => {
-      clearInterval(check);
-      resolve();
-    }, 30000);
+    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER (NOALGO Style)
+// 🎯 PRO SIGNAL SENDER (with Chart)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function sendProSignal(bot, signal) {
   const signalKey = generateSignalKey(signal.symbol, signal.direction);
   if (sentSignals.has(signalKey)) {
-    console.log(`⚠️ Signal already sent: ${signalKey}, skipping duplicate`);
+    console.log(`⚠️ Duplicate signal: ${signalKey}`);
     return null;
   }
   sentSignals.set(signalKey, Date.now());
@@ -768,7 +658,7 @@ async function sendProSignal(bot, signal) {
   const directionEmoji = signal.direction === 'UP' ? '🟢' : '🔴';
 
   try {
-    // ━━━ Step 1: Pro Signal Message ━━━
+    // ━━━ 1. Pro Signal Message ━━━
     await safeSendMessage(bot,
       `╔══════════════════════════════╗\n` +
       `     🤖 QX AI LIVE V5.0\n` +
@@ -792,7 +682,19 @@ async function sendProSignal(bot, signal) {
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Step 2: Wait for timing ━━━
+    // ━━━ 2. Chart (Entry) ━━━
+    const chartBuffer = await generateChart(
+      signal.symbol,
+      signal.candles,
+      signal.direction,
+      signal.currentPrice,
+      signal.currentPrice * (signal.direction === 'UP' ? 1.001 : 0.999) // dummy exit
+    );
+    if (chartBuffer) {
+      await safeSendPhoto(bot, chartBuffer, `📊 ${signal.symbol} | Direction: ${signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴'}`);
+    }
+
+    // ━━━ 3. Wait for timing ━━━
     console.log(`⏳ Waiting for candle timing...`);
     await waitForSignalTiming();
 
@@ -800,23 +702,17 @@ async function sendProSignal(bot, signal) {
     const nextMin = (nowBD.getUTCMinutes() + 1) % 60;
     const nextH = nowBD.getUTCHours() + (nowBD.getUTCMinutes() + 1 >= 60 ? 1 : 0);
     const entryTime = `${String(nextH % 24).padStart(2, '0')}:${String(nextMin).padStart(2, '0')}`;
-
     console.log(`📡 Signal timing! Entry: ${entryTime}`);
 
-    // ━━━ Step 3: Direction Sticker ━━━
+    // ━━━ 4. Direction Sticker ━━━
     const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
     await safeSendSticker(bot, dirSticker);
-
     console.log(`✅ ${signal.symbol} ${dirLabel} | Entry: ${entryTime}`);
 
     let entryPrice = signal.currentPrice;
-    try {
-      entryPrice = await getCurrentPrice(signal.symbol);
-    } catch (e) {
-      console.log('Entry price refresh failed, using cached.');
-    }
+    try { entryPrice = await getCurrentPrice(signal.symbol); } catch(e) {}
 
-    // ━━━ Step 4: Live Price Update ━━━
+    // ━━━ 5. Live Price Update ━━━
     await safeSendMessage(bot,
       `💹 **LIVE PRICE UPDATE**\n\n` +
       `📊 ${signal.symbol}\n` +
@@ -828,31 +724,30 @@ async function sendProSignal(bot, signal) {
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Step 5: Wait for candle close ━━━
+    // ━━━ 6. Wait for candle close ━━━
     console.log(`⏳ Waiting for candle close...`);
     await waitForCandleClose();
     await sleep(1500);
 
-    // ━━━ Step 6: Exit Price ━━━
+    // ━━━ 7. Exit Price ━━━
     let exitPrice = entryPrice;
-    try {
-      exitPrice = await getCurrentPrice(signal.symbol);
-    } catch (e) {
-      console.log('Exit price error: ' + e.message);
-    }
+    try { exitPrice = await getCurrentPrice(signal.symbol); } catch(e) {}
 
-    // ━━━ Step 7: Result ━━━
-    const isWin = signal.direction === 'UP'
-      ? exitPrice > entryPrice
-      : exitPrice < entryPrice;
-
+    // ━━━ 8. Result ━━━
+    const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
     console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
 
-    // Track result
     lastResults.push(isWin);
     if (lastResults.length > 10) lastResults.shift();
     tracker.addResult(signal.symbol, signal.direction, isWin);
 
+    // ━━━ 9. Result Chart ━━━
+    const resultChart = await generateChart(signal.symbol, signal.candles, signal.direction, entryPrice, exitPrice);
+    if (resultChart) {
+      await safeSendPhoto(bot, resultChart, `📊 Result: ${isWin ? '✅ WIN' : '❌ LOSS'} | ${signal.symbol}`);
+    }
+
+    // ━━━ 10. Result Message ━━━
     if (isWin) {
       await safeSendSticker(bot, STICKERS.SURESHOT);
       await sleep(600);
@@ -905,22 +800,20 @@ async function runSession(bot, sessionName, isManual = false) {
 
   if (!isManual && completedSessions.has(sessionKey)) {
     const lastRun = completedSessions.get(sessionKey);
-    const timeSince = Date.now() - lastRun;
-    if (timeSince < 25 * 60 * 1000) {
-      console.log(`⚠️ ${sessionName} — session already completed ${Math.round(timeSince / 60000)} minutes ago, skipping.`);
+    if (Date.now() - lastRun < 25 * 60 * 1000) {
+      console.log(`⚠️ ${sessionName} already completed recently.`);
       return { started: false, reason: 'already_completed' };
     }
   }
 
   if (!acquireSessionLock(sessionName)) {
-    console.log(`⚠️ ${sessionName} — another session is running, skipping.`);
+    console.log(`⚠️ ${sessionName} — another session is running.`);
     return { started: false, reason: 'already_running' };
   }
 
   try {
     const { display, hStr, mStr } = getBDTime();
     console.log(`🏁 ${sessionName} Session Started — BD: ${hStr}:${mStr}`);
-
     completedSessions.set(sessionKey, Date.now());
 
     await safeSendSticker(bot, STICKERS.SESSION_START);
@@ -946,12 +839,9 @@ async function runSession(bot, sessionName, isManual = false) {
     const MAX_SIGNALS = 5;
     let isFirstSignal = true;
 
-    while (
-      Date.now() - sessionStart < SESSION_DURATION &&
-      signalCount < MAX_SIGNALS
-    ) {
+    while (Date.now() - sessionStart < SESSION_DURATION && signalCount < MAX_SIGNALS) {
       if (!sessionRunning) {
-        console.log(`⚠️ Session lock lost, stopping session`);
+        console.log(`⚠️ Session lock lost, stopping`);
         break;
       }
 
@@ -960,9 +850,9 @@ async function runSession(bot, sessionName, isManual = false) {
 
       let best = null;
       try {
-        best = await findBestPair();
+        best = await findBestPair(isManual); // isManual = true → bypass time check
       } catch (e) {
-        console.error(`❌ Error finding best pair: ${e.message}`);
+        console.error(`❌ Error: ${e.message}`);
         await sleep(60000);
         continue;
       }
@@ -981,17 +871,12 @@ async function runSession(bot, sessionName, isManual = false) {
 
       try {
         const result = await sendProSignal(bot, best);
-        if (result !== null) {
-          signalCount++;
-        }
+        if (result !== null) signalCount++;
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
       }
 
-      if (
-        signalCount < MAX_SIGNALS &&
-        Date.now() - sessionStart < SESSION_DURATION
-      ) {
+      if (signalCount < MAX_SIGNALS && Date.now() - sessionStart < SESSION_DURATION) {
         console.log(`😴 Waiting 5 minutes...`);
         await sleep(5 * 60 * 1000);
       }
@@ -1015,7 +900,7 @@ async function runSession(bot, sessionName, isManual = false) {
       { parse_mode: 'Markdown' }
     );
 
-    console.log(`✅ ${sessionName} Session Ended | Total: ${signalCount}`);
+    console.log(`✅ ${sessionName} Ended | Total: ${signalCount}`);
     return { started: true, signalCount };
 
   } catch (err) {
@@ -1028,142 +913,97 @@ async function runSession(bot, sessionName, isManual = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ AUTO SCHEDULER (UPGRADED)
+// ⏰ AUTO SCHEDULER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 module.exports = function (bot) {
   if (schedulerInitialized) {
-    console.log('⚠️ Scheduler already initialized, skipping duplicate initialization');
+    console.log('⚠️ Scheduler already initialized');
     return;
   }
-
   schedulerInitialized = true;
-  console.log('✅ Session scheduler started! (v5.0 Pro)');
+  console.log('✅ Scheduler started (v5.0 + Chart)');
 
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-  }
+  if (schedulerInterval) clearInterval(schedulerInterval);
 
   schedulerInterval = setInterval(async () => {
     try {
       const { h, m, s, dateKey } = getBDTime();
 
-      // ━━━ Morning Reminder — ১১:৩০ ━━━
+      // Reminders & Sessions (same as before)
       if (h === 11 && m === 30 && s < 10) {
-        const reminderKey = generateReminderKey('morning_reminder');
-        if (!sentReminders.has(reminderKey)) {
-          sentReminders.set(reminderKey, Date.now());
+        const key = generateReminderKey('morning_reminder');
+        if (!sentReminders.has(key)) {
+          sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `⏰ **Morning Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
-            `🕙 ১২:০০ টায় শুরু হবে (BD Time)\n` +
-            `📊 সবাই রেডি থাকুন! ✅\n\n` +
-            `💹 আজকের Best Signals নিয়ে আসছি!`,
+            `⏰ **Morning Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 ১২:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
-
-      // ━━━ Morning Session — ১২:০০ (NEW) ━━━
       if (h === 12 && m === 0 && s < 10) {
-        const sessionKey = generateSessionKey('🌅 Morning');
-        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
-          runSession(bot, '🌅 Morning', false).catch(err => {
-            console.error('Morning session error:', err.message);
-          });
+        const key = generateSessionKey('🌅 Morning');
+        if (!completedSessions.has(key) && !isSessionLocked()) {
+          runSession(bot, '🌅 Morning', false).catch(e => console.error(e.message));
         }
       }
-
-      // ━━━ London Reminder — ১৫:৩০ ━━━
       if (h === 15 && m === 30 && s < 10) {
-        const reminderKey = generateReminderKey('london_reminder');
-        if (!sentReminders.has(reminderKey)) {
-          sentReminders.set(reminderKey, Date.now());
+        const key = generateReminderKey('london_reminder');
+        if (!sentReminders.has(key)) {
+          sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `⏰ **London Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
-            `🕙 ৪:০০ টায় শুরু হবে (BD Time)\n` +
-            `📊 সবাই রেডি থাকুন! ✅\n\n` +
-            `💹 London Session এর Best Signals নিয়ে আসছি!`,
+            `⏰ **London Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 ৪:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
-
-      // ━━━ London Session — ১৬:০০ (NEW) ━━━
       if (h === 16 && m === 0 && s < 10) {
-        const sessionKey = generateSessionKey('🇬🇧 London');
-        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
-          runSession(bot, '🇬🇧 London', false).catch(err => {
-            console.error('London session error:', err.message);
-          });
+        const key = generateSessionKey('🇬🇧 London');
+        if (!completedSessions.has(key) && !isSessionLocked()) {
+          runSession(bot, '🇬🇧 London', false).catch(e => console.error(e.message));
         }
       }
-
-      // ━━━ Evening Reminder — ২০:৩০ ━━━
       if (h === 20 && m === 30 && s < 10) {
-        const reminderKey = generateReminderKey('evening_reminder');
-        if (!sentReminders.has(reminderKey)) {
-          sentReminders.set(reminderKey, Date.now());
+        const key = generateReminderKey('evening_reminder');
+        if (!sentReminders.has(key)) {
+          sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `🌙 **Evening Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
-            `🕙 রাত ৯:০০ টায় শুরু হবে (BD Time)\n` +
-            `📊 সবাই রেডি থাকুন! ✅\n\n` +
-            `💹 Evening এর Best Signals নিয়ে আসছি!`,
+            `🌙 **Evening Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 রাত ৯:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
-
-      // ━━━ Evening Session — ২১:০০ ━━━
       if (h === 21 && m === 0 && s < 10) {
-        const sessionKey = generateSessionKey('🌙 Evening');
-        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
-          runSession(bot, '🌙 Evening', false).catch(err => {
-            console.error('Evening session error:', err.message);
-          });
+        const key = generateSessionKey('🌙 Evening');
+        if (!completedSessions.has(key) && !isSessionLocked()) {
+          runSession(bot, '🌙 Evening', false).catch(e => console.error(e.message));
         }
       }
-
-      // ━━━ NY Session Reminder — ২২:৩০ ━━━
       if (h === 22 && m === 30 && s < 10) {
-        const reminderKey = generateReminderKey('ny_reminder');
-        if (!sentReminders.has(reminderKey)) {
-          sentReminders.set(reminderKey, Date.now());
+        const key = generateReminderKey('ny_reminder');
+        if (!sentReminders.has(key)) {
+          sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `🗽 **NY Session শুরু হবে ৩০ মিনিট পরে!**\n\n` +
-            `🕙 রাত ১১:০০ টায় শুরু হবে (BD Time)\n` +
-            `📊 সবাই রেডি থাকুন! ✅\n\n` +
-            `💹 NY Session এর Best Signals নিয়ে আসছি!`,
+            `🗽 **NY Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 রাত ১১:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
-
-      // ━━━ NY Session — ২৩:০০ (NEW) ━━━
       if (h === 23 && m === 0 && s < 10) {
-        const sessionKey = generateSessionKey('🗽 NY');
-        if (!completedSessions.has(sessionKey) && !isSessionLocked()) {
-          runSession(bot, '🗽 NY', false).catch(err => {
-            console.error('NY session error:', err.message);
-          });
+        const key = generateSessionKey('🗽 NY');
+        if (!completedSessions.has(key) && !isSessionLocked()) {
+          runSession(bot, '🗽 NY', false).catch(e => console.error(e.message));
         }
       }
 
-      // ━━━ Daily Stats at midnight ━━━
       if (h === 0 && m === 0 && s < 10) {
-        const statsMsg = tracker.getStatsMessage();
         await safeSendMessage(bot,
-          `📊 **Daily Performance Report**\n\n` +
-          `${statsMsg}\n\n` +
-          `📅 Date: ${dateKey}`,
+          `📊 **Daily Performance Report**\n\n${tracker.getStatsMessage()}\n\n📅 Date: ${dateKey}`,
           { parse_mode: 'Markdown' }
         );
       }
 
-      // Cleanup old entries every hour
-      if (m === 0 && s < 10) {
-        cleanupOldEntries();
-      }
+      if (m === 0 && s < 10) cleanupOldEntries();
 
     } catch (e) {
       console.error('Scheduler error:', e.message);
@@ -1179,11 +1019,8 @@ module.exports.runSession = (bot, sessionName) => runSession(bot, sessionName, t
 module.exports.isSessionRunning = () => sessionRunning;
 module.exports.getStats = () => tracker.getStatsMessage();
 module.exports.cleanup = () => {
-  if (schedulerInterval) {
-    clearInterval(schedulerInterval);
-    schedulerInterval = null;
-  }
+  if (schedulerInterval) { clearInterval(schedulerInterval); schedulerInterval = null; }
   schedulerInitialized = false;
   releaseSessionLock();
-  console.log('✅ Session scheduler cleaned up');
+  console.log('✅ Cleaned up');
 };
