@@ -8,6 +8,8 @@
     "dependencies": {
         "node-telegram-bot-api": "^0.66.0",
         "mongodb": "^6.0.0",
-        "node-fetch": "^2.6.9"
+        "node-fetch": "^2.6.9",
+        "chart.js": "^4.4.0",
+        "chartjs-node-canvas": "^4.1.6"
     }
 }
