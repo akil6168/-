@@ -1,4 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (Pro v5.0 + Chart)
+// session.js - Qx AI Predictor VIP Session (Pro v6.0 + Chart + Extra Indicators)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -84,7 +84,7 @@ class PerformanceTracker {
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
     return `
-📊 **QX AI PERFORMANCE v5.0**
+📊 **QX AI PERFORMANCE v6.0**
 
 ━━━━━━━━━━━━━━━━━━━
 📈 **TOTAL**: ${total}
@@ -419,20 +419,75 @@ function calcSupportResistance(candles) {
   return { support, resistance, nearSupport, nearResistance };
 }
 
+// ✅ NEW — ADX (ট্রেন্ড স্ট্রেংথ)
+function calcADX(candles, period = 14) {
+  if (candles.length < period + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
+  let plusDM = [], minusDM = [], tr = [];
+  for (let i = 1; i < candles.length; i++) {
+    const upMove = candles[i].high - candles[i-1].high;
+    const downMove = candles[i-1].low - candles[i].low;
+    plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
+    minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
+    tr.push(Math.max(
+      candles[i].high - candles[i].low,
+      Math.abs(candles[i].high - candles[i-1].close),
+      Math.abs(candles[i].low - candles[i-1].close)
+    ));
+  }
+  const sum = arr => arr.slice(-period).reduce((a,b) => a+b, 0);
+  const trSum = sum(tr) || 1;
+  const plusDI = 100 * (sum(plusDM) / trSum);
+  const minusDI = 100 * (sum(minusDM) / trSum);
+  const adx = 100 * Math.abs(plusDI - minusDI) / ((plusDI + minusDI) || 1);
+  return { adx, plusDI, minusDI };
+}
+
+// ✅ NEW — Supertrend
+function calcSupertrend(candles, period = 10, multiplier = 3) {
+  const atr = calcATR(candles, period);
+  const last = candles[candles.length - 1];
+  const hl2 = (last.high + last.low) / 2;
+  const upperBand = hl2 + multiplier * atr;
+  const lowerBand = hl2 - multiplier * atr;
+  let dir = 'NEUTRAL';
+  if (last.close > upperBand) dir = 'DOWN';
+  else if (last.close < lowerBand) dir = 'UP';
+  else dir = last.close > hl2 ? 'UP' : 'DOWN';
+  return { dir, upperBand, lowerBand };
+}
+
+// ✅ NEW — VWAP (Volume Weighted Average Price)
+function calcVWAP(candles) {
+  let cumPV = 0, cumVol = 0;
+  const recent = candles.slice(-30);
+  for (const c of recent) {
+    const typical = (c.high + c.low + c.close) / 3;
+    const vol = c.volume || 1;
+    cumPV += typical * vol;
+    cumVol += vol;
+  }
+  const vwap = cumVol > 0 ? cumPV / cumVol : recent[recent.length - 1].close;
+  const last = recent[recent.length - 1].close;
+  return { vwap, dir: last > vwap ? 'UP' : 'DOWN', dist: Math.abs(last - vwap) / last * 100 };
+}
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🔍 FULL ANALYSIS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function analyzeSymbol(symbol) {
+async function analyzeSymbol(symbol, relaxed = false) {
   const candles = await getCandles(symbol, 50);
   const h4Candles = await getCandles(symbol, 100, '5min');
-  
+
   const rsi = calcRSI(candles), rsi7 = calcRSI(candles, 7);
   const stoch = calcStochRSI(candles), macd = calcMACD(candles);
   const bb = calcBB(candles), atr = calcATR(candles);
   const cci = calcCCI(candles), wr = calcWilliamsR(candles);
   const trend = calcTrend(candles), h4Trend = calcTrend(h4Candles);
   const cp = calcCandlePattern(candles), sr = calcSupportResistance(candles);
+  const adx = calcADX(candles);
+  const supertrend = calcSupertrend(candles);
+  const vwap = calcVWAP(candles);
   const last = candles[candles.length - 1].close;
 
   let up = 0, dn = 0;
@@ -463,6 +518,18 @@ async function analyzeSymbol(symbol) {
 
   if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); } else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
+  // ✅ নতুন পাওয়ারফুল ইন্ডিকেটর — ADX, Supertrend, VWAP
+  if (adx.adx >= 25) {
+    if (adx.plusDI > adx.minusDI) { up += 3; signals.push(`ADX Strong (${adx.adx.toFixed(0)}) ✅`); }
+    else { dn += 3; signals.push(`ADX Strong (${adx.adx.toFixed(0)}) ✅`); }
+  }
+
+  if (supertrend.dir === 'UP') { up += 3; signals.push('Supertrend Bullish 🚀'); }
+  else if (supertrend.dir === 'DOWN') { dn += 3; signals.push('Supertrend Bearish 🔻'); }
+
+  if (vwap.dir === 'UP') { up += 2; signals.push('Above VWAP 📈'); }
+  else { dn += 2; signals.push('Below VWAP 📉'); }
+
   const total = up + dn;
   const dominant = Math.max(up, dn);
   const ratio = total > 0 ? dominant / total : 0;
@@ -477,17 +544,28 @@ async function analyzeSymbol(symbol) {
   else if (aiScore >= 75) confidence = 'Medium ⚡';
   else confidence = 'Low ⚠️';
 
-  const isValid = ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80;
+  // ✅ কনফ্লুয়েন্স চেক — মূল ইন্ডিকেটরগুলো একমত কিনা তা গণনা করা
+  const directionsAgree = [
+    trend.dir,
+    adx.adx >= 25 ? (adx.plusDI > adx.minusDI ? 'UP' : 'DOWN') : direction,
+    supertrend.dir === 'NEUTRAL' ? direction : supertrend.dir,
+    vwap.dir
+  ].filter(d => d === direction).length;
+
+  const isValid = relaxed
+    ? (ratio >= 0.65 && aiScore >= 65 && volatility >= 0.002)
+    : (ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80 && adx.adx >= 22 && directionsAgree >= 3);
 
   return {
     symbol, direction, ratio, aiScore, trend, h4Trend: h4Trend.dir,
-    signals: signals.slice(0,5), currentPrice: last, volatility, confidence,
-    isSureShot: aiScore >= 90, isValid, sr, candles
+    signals: signals.slice(0, 6), currentPrice: last, volatility, confidence,
+    isSureShot: aiScore >= 90 && directionsAgree >= 4, isValid, sr, candles,
+    adx: adx.adx, directionsAgree
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CHART GENERATOR (Candlestick with Entry/Exit)
+// 📊 CHART GENERATOR (Line chart with Entry/Exit via QuickChart)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function generateChart(symbol, candles, direction, entryPrice, exitPrice) {
@@ -568,11 +646,12 @@ async function generateChart(symbol, candles, direction, entryPrice, exitPrice) 
     return null;
   }
 }
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 BEST PAIR FINDER (with ignoreTime)
+// 🔍 BEST PAIR FINDER (with ignoreTime + relaxed mode)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function findBestPair(ignoreTime = false) {
+async function findBestPair(ignoreTime = false, relaxed = false) {
   if (!ignoreTime && !isGoodTradingTime()) {
     console.log(`⏰ ${getTradingSessionName()} - Not good trading time`);
     return null;
@@ -584,7 +663,7 @@ async function findBestPair(ignoreTime = false) {
 
   let best = null;
   const activeSessions = getActiveSessions();
-  console.log(`📊 Active Sessions: ${activeSessions.join(', ') || 'None'}`);
+  console.log(`📊 Active Sessions: ${activeSessions.join(', ') || 'None'}${relaxed ? ' | ⚡ RELAXED MODE' : ''}`);
 
   for (const pair of SESSION_PAIRS) {
     try {
@@ -592,10 +671,10 @@ async function findBestPair(ignoreTime = false) {
         console.log(`⏭️ Skipping ${pair.symbol} - Not suitable`);
         continue;
       }
-      const result = await analyzeSymbol(pair.symbol);
+      const result = await analyzeSymbol(pair.symbol, relaxed);
       result.flag = pair.flag;
       result.priority = pair.priority;
-      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | Vol=${(result.volatility*100).toFixed(2)}%`);
+      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/4 | Vol=${(result.volatility*100).toFixed(2)}%`);
 
       if (!result.isValid) { await sleep(800); continue; }
 
@@ -662,7 +741,7 @@ async function sendProSignal(bot, signal) {
     // ━━━ 1. Pro Signal Message ━━━
     await safeSendMessage(bot,
       `╔══════════════════════════════╗\n` +
-      `     🤖 QX AI LIVE V5.0\n` +
+      `     🤖 QX AI LIVE V6.0\n` +
       `     ${Math.floor(Math.random() * 1000 + 100)} monthly users\n` +
       `╚══════════════════════════════╝\n\n` +
       `━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -821,7 +900,7 @@ async function runSession(bot, sessionName, isManual = false) {
     await sleep(1500);
 
     await safeSendMessage(bot,
-      `🏁 **QX AI LIVE V5.0**\n\n` +
+      `🏁 **QX AI LIVE V6.0**\n\n` +
       `📈 Everyone stay ready!\n\n` +
       `⏰ Time: ${display} (BD Time)\n` +
       `📊 Session: ${getTradingSessionName()}\n\n` +
@@ -839,6 +918,9 @@ async function runSession(bot, sessionName, isManual = false) {
     let signalCount = 0;
     const MAX_SIGNALS = 5;
     let isFirstSignal = true;
+    let lastSignalTime = Date.now();
+    const MIN_SIGNAL_GAP = 5 * 60 * 1000;   // ✅ কমপক্ষে ৫ মিনিট গ্যাপ
+    const MAX_SIGNAL_GAP = 15 * 60 * 1000;  // ✅ সর্বোচ্চ ১৫ মিনিটের মধ্যে সিগন্যাল
 
     while (Date.now() - sessionStart < SESSION_DURATION && signalCount < MAX_SIGNALS) {
       if (!sessionRunning) {
@@ -849,9 +931,13 @@ async function runSession(bot, sessionName, isManual = false) {
       const timeLeft = Math.round((SESSION_DURATION - (Date.now() - sessionStart)) / 60000);
       console.log(`🔍 Scanning... Signal: ${signalCount}/${MAX_SIGNALS} | Time left: ${timeLeft}min`);
 
+      const gapSinceLast = Date.now() - lastSignalTime;
+      const forceRelaxed = gapSinceLast >= MAX_SIGNAL_GAP;
+
       let best = null;
       try {
-        best = await findBestPair(isManual); // isManual = true → bypass time check
+        best = await findBestPair(isManual, forceRelaxed); // isManual = true → bypass time check
+        if (forceRelaxed && best) console.log(`⚡ 15min limit reached — sending relaxed signal: ${best.symbol}`);
       } catch (e) {
         console.error(`❌ Error: ${e.message}`);
         await sleep(60000);
@@ -864,6 +950,13 @@ async function runSession(bot, sessionName, isManual = false) {
         continue;
       }
 
+      // ✅ Minimum ৫ মিনিট গ্যাপ নিশ্চিত করা (প্রথম সিগন্যাল বাদে)
+      if (!isFirstSignal && gapSinceLast < MIN_SIGNAL_GAP) {
+        const waitMore = MIN_SIGNAL_GAP - gapSinceLast;
+        console.log(`⏱️ Min gap not met, waiting ${Math.round(waitMore/1000)}s more...`);
+        await sleep(waitMore);
+      }
+
       if (!isFirstSignal) {
         await safeSendSticker(bot, STICKERS.NEXT_ONE);
         await sleep(2000);
@@ -872,14 +965,14 @@ async function runSession(bot, sessionName, isManual = false) {
 
       try {
         const result = await sendProSignal(bot, best);
-        if (result !== null) signalCount++;
+        if (result !== null) { signalCount++; lastSignalTime = Date.now(); }
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
       }
 
       if (signalCount < MAX_SIGNALS && Date.now() - sessionStart < SESSION_DURATION) {
-        console.log(`😴 Waiting 5 minutes...`);
-        await sleep(5 * 60 * 1000);
+        console.log(`😴 Waiting before next scan...`);
+        await sleep(60 * 1000);
       }
     }
 
@@ -923,7 +1016,7 @@ module.exports = function (bot) {
     return;
   }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v5.0 + Chart)');
+  console.log('✅ Scheduler started (v6.0 + Chart + Extra Indicators)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
