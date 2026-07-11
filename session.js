@@ -1,4 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (v7.0 - Full Chart + New Templates + Dynamic Close)
+// session.js - Qx AI Predictor VIP Session (v8.0 - TradingView-style Chart + Streamlined Messages)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -16,8 +16,6 @@ const STICKERS = {
   SESSION_CLOSE: 'CAACAgUAAxkBAAIJKWpPVzu4tb4onZL4742yeSF5y0oLAAIJIAACc3VpVkNdndLynxI-PAQ',
   CALL:          'CAACAgUAAxkBAAIJK2pPV1ztYYU8_R49EuK5oBmFffV8AALJIgAC5k9pVqeGo-FqhqZxPAQ',
   PUT:           'CAACAgUAAxkBAAIJLWpPV14vd8gAAWhsbmXWF7ZV1myZkwAC6h4AAsjCaFalqCdpCisveDwE',
-  MTG_UP:        'CAACAgUAAxkBAAIJL2pPV4nrleMPO16j3QjBGH849I43AAIzMQACMjBpVr5zJRxZHFjYPAQ',
-  MTG_DOWN:      'CAACAgUAAxkBAAIJMWpPV4tbhka9zx-VcQPhCriyx0Q8AAKTJwACxONpVk9q_2A9wcpPPAQ',
   NEXT_ONE:      'CAACAgUAAxkBAAIJM2pPV61SI184RUwfBH6nghFXAZCYAALOIAACKY5oVv-5TOUJuFB8PAQ',
   ARE_YOU_READY: 'CAACAgUAAxkBAAIJNWpPV8EahWO7lbY1ESG3M2VuyRVHAALJIAACHXdoVqVbV76nUyGLPAQ',
   SURESHOT:      'CAACAgUAAxkBAAIJN2pPWNbKDC9YJaHXrsaf1uO1aXmoAAKCJQACS0qAVqdi7137PDZoPAQ'
@@ -91,7 +89,7 @@ class PerformanceTracker {
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
     return `
-📊 **QX AI PERFORMANCE v7.0**
+📊 **QX AI PERFORMANCE v8.0**
 
 ━━━━━━━━━━━━━━━━━━━
 📈 **TOTAL**: ${total}
@@ -141,9 +139,6 @@ const completedSessions = new Map();
 const sentReminders = new Map();
 const SESSION_LOCK_TIMEOUT = 45 * 60 * 1000;
 const lastResults = [];
-let isRecoveryMode = false;
-let recoveryAttempts = 0;
-const MAX_RECOVERY_ATTEMPTS = 5;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🛠️ HELPERS
@@ -201,8 +196,6 @@ function releaseSessionLock() {
   sessionRunning = false;
   sessionLockTimestamp = 0;
   currentSessionId = null;
-  isRecoveryMode = false;
-  recoveryAttempts = 0;
 }
 
 function isSessionLocked() {
@@ -275,7 +268,7 @@ async function safeSendMessage(bot, text, options = {}, retries = 1) {
 async function safeSendPhoto(bot, photo, caption = '', retries = 1) {
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const result = await bot.sendPhoto(CHANNEL_ID, photo, { caption });
+      const result = await bot.sendPhoto(CHANNEL_ID, photo, { caption, parse_mode: 'Markdown' });
       return result;
     } catch(e) {
       console.log(`⚠️ Photo send failed (${attempt}): ${e.message}`);
@@ -578,6 +571,12 @@ async function analyzeSymbol(symbol, relaxed = false) {
   const direction = up >= dn ? 'UP' : 'DOWN';
   const aiScore = Math.round(ratio * 100);
 
+  let scoreLabel = '';
+  if (aiScore >= 90) scoreLabel = 'VERY HIGH 🔥';
+  else if (aiScore >= 80) scoreLabel = 'HIGH 🟢';
+  else if (aiScore >= 70) scoreLabel = 'MEDIUM 🟡';
+  else scoreLabel = 'LOW ⚠️';
+
   const directionsAgree = [
     trend.dir, ichimoku.trend,
     supertrend.dir === 'NEUTRAL' ? direction : supertrend.dir,
@@ -592,75 +591,105 @@ async function analyzeSymbol(symbol, relaxed = false) {
     : (ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80 && adx.adx >= 22 && directionsAgree >= 4);
 
   return {
-    symbol, direction, ratio, aiScore, trend: trend.dir,
+    symbol, direction, ratio, aiScore, scoreLabel, trend: trend.dir,
     signals: signals.slice(0, 8), currentPrice: last, volatility,
     isValid, sr, candles, adx: adx.adx, directionsAgree
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 PROFESSIONAL CANDLESTICK CHART (EMA + S/R + RSI subplot + time axis)
+// 📊 TRADINGVIEW-STYLE CANDLESTICK CHART
+// (candlestick + EMA7/21 + Support/Resistance + RSI subplot + header + badge)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function formatChartTime(offsetMinutesFromNow) {
-  // চার্টের শেষ candle-কে "এখন" ধরে পেছনের প্রতিটা candle-এর সময় হিসাব করা
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000 - offsetMinutesFromNow * 60 * 1000);
   return `${String(bd.getUTCHours()).padStart(2,'0')}:${String(bd.getUTCMinutes()).padStart(2,'0')}`;
 }
 
-async function generateCandleChart(symbol, candles, entryPrice, exitPrice, isMTG = false) {
+/**
+ * badgeType: 'CALL' | 'PUT' | 'SURESHOT' | null
+ * subtitle: e.g. "CONFIDENCE 82% • LIVE MARKET" or "RESULT"
+ */
+async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badgeType = null, subtitle = '') {
   try {
     const plotCandles = candles.slice(-30);
     const n = plotCandles.length;
-    // সময় লেবেল: শেষ candle = এখন, প্রতিটা পিছনের candle ১ মিনিট আগে
     const timeLabels = plotCandles.map((_, i) => formatChartTime(n - 1 - i));
 
-    const ohlcData = plotCandles.map((c, i) => ({ x: i + 1, o: c.open, h: c.high, l: c.low, c: c.close }));
+    // ✅ ফিক্স: candlestick ডেটাতে numeric x (index) ব্যবহার করলে Chart.js
+    // financial প্লাগইন সেটাকে timestamp (1970...) ধরে ফেলে। তাই label-এর index
+    // ব্যবহার করছি এবং x-axis টাইপ 'category' রাখছি (labels থেকে সরাসরি টাইম আসবে)।
+    const ohlcData = plotCandles.map((c, i) => ({ x: i, o: c.open, h: c.high, l: c.low, c: c.close }));
     const ema7Series = calcEMASeries(plotCandles, 7);
     const ema21Series = calcEMASeries(plotCandles, 21);
     const sr = calcSupportResistance(candles);
 
-    // RSI subplot ডেটা (14 period, প্রতিটা candle পয়েন্টে)
+    // RSI (14) প্রতিটা candle পয়েন্টে
     const rsiPoints = [];
     for (let i = 0; i < plotCandles.length; i++) {
       const sliceEnd = candles.length - plotCandles.length + i + 1;
       const slice = candles.slice(0, sliceEnd);
       rsiPoints.push(slice.length >= 15 ? calcRSI(slice) : 50);
     }
+    const lastRsi = rsiPoints[rsiPoints.length - 1];
 
     const annotations = {
       supportLine: {
-        type: 'line', yMin: sr.support, yMax: sr.support, scaleID: 'y',
-        borderColor: 'rgba(0,255,136,0.6)', borderWidth: 1, borderDash: [4,4],
-        label: { content: `SUPPORT ${sr.support.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(0,255,136,0.7)', color: '#000', font: { size: 9 } }
+        type: 'line', yMin: sr.support, yMax: sr.support, yScaleID: 'yPrice',
+        borderColor: 'rgba(150,150,150,0.5)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `S ${sr.support.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(150,150,150,0.9)', font: { size: 9 } }
       },
       resistanceLine: {
-        type: 'line', yMin: sr.resistance, yMax: sr.resistance, scaleID: 'y',
-        borderColor: 'rgba(255,68,68,0.6)', borderWidth: 1, borderDash: [4,4],
-        label: { content: `RESISTANCE ${sr.resistance.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(255,68,68,0.7)', color: '#000', font: { size: 9 } }
+        type: 'line', yMin: sr.resistance, yMax: sr.resistance, yScaleID: 'yPrice',
+        borderColor: 'rgba(255,68,68,0.5)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `R ${sr.resistance.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(255,68,68,0.9)', font: { size: 9 } }
       }
     };
 
     if (entryPrice) {
       annotations.entryLine = {
-        type: 'line', yMin: entryPrice, yMax: entryPrice, scaleID: 'y',
-        borderColor: 'rgba(255,215,0,0.9)', borderWidth: 2, borderDash: [6, 4],
-        label: { content: `${isMTG ? 'MTG ENTRY' : 'ENTRY'} ${entryPrice.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.85)', color: '#000', font: { size: 10, weight: 'bold' } }
+        type: 'line', yMin: entryPrice, yMax: entryPrice, yScaleID: 'yPrice',
+        borderColor: 'rgba(255,255,255,0.8)', borderWidth: 1.5, borderDash: [6, 3],
+        label: { content: `ENTRY ${entryPrice.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'transparent', color: '#fff', font: { size: 10 } }
       };
     }
     if (exitPrice && entryPrice) {
+      const isWin = exitPrice > entryPrice;
       annotations.exitLine = {
-        type: 'line', yMin: exitPrice, yMax: exitPrice, scaleID: 'y',
-        borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444', borderWidth: 2, borderDash: [6, 4],
-        label: {
-          content: exitPrice > entryPrice ? (isMTG ? 'MTG WIN' : 'WIN') : (isMTG ? 'MTG LOSS' : 'LOSS'),
-          enabled: true, position: 'end',
-          backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)', color: '#fff', font: { size: 11, weight: 'bold' }
-        }
+        type: 'line', yMin: exitPrice, yMax: exitPrice, yScaleID: 'yPrice',
+        borderColor: isWin ? '#00c896' : '#ff5252', borderWidth: 1.5, borderDash: [2, 2],
+        label: { content: `CLOSE ${exitPrice.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: isWin ? 'rgba(0,200,150,0.85)' : 'rgba(255,82,82,0.85)', color: '#fff', font: { size: 10, weight: 'bold' } }
       };
     }
 
-    const headerText = `${symbol}   •   M1   •   ${getBDTime().fullTime} (UTC+6)   •   ${isMTG ? 'MTG SIGNAL' : 'QX AI PREDICTOR'}`;
+    // ━━━ উপরে ডান কোণায় badge (CALL/PUT/SURESHOT) ━━━
+    if (badgeType) {
+      const badgeColors = {
+        CALL: { border: '#00c896', bg: 'rgba(0,200,150,0.15)' },
+        PUT: { border: '#ff5252', bg: 'rgba(255,82,82,0.15)' },
+        SURESHOT: { border: '#00c896', bg: 'rgba(0,200,150,0.15)' }
+      };
+      const bc = badgeColors[badgeType] || badgeColors.CALL;
+      const badgeLabel = badgeType === 'CALL' ? '▲ CALL' : badgeType === 'PUT' ? '▼ PUT' : 'SURESHOT ✓';
+      annotations.badge = {
+        type: 'label',
+        xValue: n - 2,
+        yValue: Math.max(...plotCandles.map(c => c.high)),
+        yAdjust: -25,
+        content: [badgeLabel],
+        color: bc.border,
+        backgroundColor: bc.bg,
+        borderColor: bc.border,
+        borderWidth: 1.5,
+        borderRadius: 4,
+        font: { size: 12, weight: 'bold' },
+        padding: 6
+      };
+    }
+
+    const titleText = symbol;
+    const subtitleText = subtitle || `M1  •  ${getBDTime().fullTime} (UTC+6)  •  AI Engine v5.0`;
 
     const chartConfig = {
       type: 'candlestick',
@@ -671,95 +700,84 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, isMTG
             label: symbol,
             data: ohlcData,
             color: { up: '#00c896', down: '#ff5252', unchanged: '#999999' },
-            yAxisID: 'y'
+            yAxisID: 'yPrice'
           },
           {
             type: 'line', label: 'EMA 7',
-            data: ema7Series.map((v, i) => ({ x: i + 1, y: v })),
-            borderColor: '#ffaa00', borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y'
+            data: ema7Series.map((v, i) => ({ x: i, y: v })),
+            borderColor: '#ffaa00', borderWidth: 1.3, pointRadius: 0, fill: false, yAxisID: 'yPrice'
           },
           {
             type: 'line', label: 'EMA 21',
-            data: ema21Series.map((v, i) => ({ x: i + 1, y: v })),
-            borderColor: '#00d4ff', borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y'
+            data: ema21Series.map((v, i) => ({ x: i, y: v })),
+            borderColor: '#00d4ff', borderWidth: 1.3, pointRadius: 0, fill: false, yAxisID: 'yPrice'
+          },
+          {
+            type: 'line', label: 'RSI (14)',
+            data: rsiPoints.map((v, i) => ({ x: i, y: v })),
+            borderColor: '#b568f2', backgroundColor: 'rgba(181,104,242,0.08)',
+            borderWidth: 1.3, pointRadius: 0, fill: true, tension: 0.15,
+            yAxisID: 'yRsi'
           }
         ]
       },
       options: {
-        layout: { padding: { top: 40 } },
+        layout: { padding: { top: 55, right: 10, left: 5, bottom: 5 } },
         plugins: {
           title: {
-            display: true, text: headerText, color: '#e8e8e8',
-            font: { size: 13, weight: 'normal' }, align: 'start', padding: { bottom: 10 }
+            display: true, text: titleText, color: '#f0f0f0',
+            font: { size: 20, weight: 'bold' }, align: 'start', padding: { bottom: 2 }
+          },
+          subtitle: {
+            display: true, text: subtitleText, color: '#8a8a8a',
+            font: { size: 11 }, align: 'start', padding: { bottom: 10 }
           },
           legend: {
-            display: true, position: 'top', align: 'end',
-            labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14 }
+            display: true, position: 'top', align: 'start',
+            labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14, filter: (item) => item.text !== symbol }
           },
           annotation: { annotations }
         },
         scales: {
           x: {
-            ticks: { color: '#888', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } },
-            grid: { color: 'rgba(255,255,255,0.04)' },
-            title: { display: true, text: 'Time (UTC+6)', color: '#666', font: { size: 9 } }
+            type: 'category',
+            ticks: { color: '#777', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } },
+            grid: { color: 'rgba(255,255,255,0.04)' }
           },
-          y: {
+          yPrice: {
             position: 'right',
+            stack: 'panels', stackWeight: 3,
             ticks: { color: '#999', font: { size: 10 } },
             grid: { color: 'rgba(255,255,255,0.05)' }
-          }
-        }
-      }
-    };
-
-    const rsiChartConfig = {
-      type: 'line',
-      data: {
-        labels: timeLabels,
-        datasets: [{
-          label: 'RSI (14)',
-          data: rsiPoints,
-          borderColor: '#b568f2',
-          backgroundColor: 'rgba(181,104,242,0.08)',
-          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15
-        }]
-      },
-      options: {
-        plugins: {
-          legend: { display: true, position: 'top', align: 'end', labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14 } },
-          annotation: {
-            annotations: {
-              rsi70: { type: 'line', yMin: 70, yMax: 70, borderColor: 'rgba(255,68,68,0.4)', borderWidth: 1, borderDash: [3,3] },
-              rsi30: { type: 'line', yMin: 30, yMax: 30, borderColor: 'rgba(0,255,136,0.4)', borderWidth: 1, borderDash: [3,3] }
+          },
+          yRsi: {
+            position: 'right',
+            stack: 'panels', stackWeight: 1,
+            min: 0, max: 100,
+            ticks: { color: '#999', font: { size: 9 }, stepSize: 30 },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            afterFit: (scale) => {
+              // RSI last value ছোট লেবেল হিসেবে ডানে দেখানো
             }
           }
-        },
-        scales: {
-          x: { ticks: { color: '#888', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
-          y: { position: 'right', min: 0, max: 100, ticks: { color: '#999', font: { size: 10 }, stepSize: 30 }, grid: { color: 'rgba(255,255,255,0.05)' } }
         }
       }
     };
 
-    // ━━━ ২টা চার্ট (মূল + RSI) একসাথে জোড়া লাগানোর জন্য দুইটা আলাদা রিকোয়েস্ট ━━━
-    const [mainRes, rsiRes] = await Promise.all([
-      fetch('https://quickchart.io/chart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart: chartConfig, width: 900, height: 480, backgroundColor: '#0f0f1e', version: '3' })
-      }),
-      fetch('https://quickchart.io/chart', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chart: rsiChartConfig, width: 900, height: 160, backgroundColor: '#0f0f1e', version: '3' })
+    const response = await fetch('https://quickchart.io/chart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chart: chartConfig,
+        width: 900,
+        height: 560,
+        backgroundColor: '#0d0e17',
+        version: '3'
       })
-    ]);
+    });
 
-    if (!mainRes.ok) throw new Error(`QuickChart main error: ${mainRes.status}`);
-    // RSI subplot fetch fail করলেও শুধু মূল চার্ট পাঠানো যায়, তাই এটা ব্লক করবে না
-    const mainBuffer = await mainRes.buffer();
-    return mainBuffer;
+    if (!response.ok) throw new Error(`QuickChart error: ${response.status}`);
+    return await response.buffer();
   } catch (error) {
     console.error('❌ Chart generation failed:', error.message);
     return null;
@@ -847,188 +865,162 @@ function waitForNewCandle() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER (নতুন মেসেজ ফরম্যাট)
+// 🎯 SIGNAL MESSAGE BUILDERS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function sendProSignal(bot, signal, isMTG = false) {
+function buildSignalCaption(signal, flag, entryPrice, entryTimeStr) {
+  return (
+    `╔════════════════════╗\n` +
+    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
+    `╚════════════════════╝\n\n` +
+    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎯 𝗤𝗫 𝗦𝗖𝗢𝗥𝗘 ➜ 𝗪${signal.scoreLabel} ${signal.aiScore}%\n` +
+    `💰 𝗘𝗡𝗧𝗥𝗬 𝗣𝗥𝗜𝗖𝗘: ${entryPrice.toFixed(5)}\n` +
+    `⏰ 𝗘𝗡𝗧𝗥𝗬 𝗧𝗜𝗠𝗘: ${entryTimeStr} (𝗕𝗗)\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
+    `⚠️ 𝗠𝗔𝗫 𝟭 𝗦𝗧𝗘𝗣 𝗠𝗧𝗚\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
+    `⚠️ Trade at your own risk.`
+  );
+}
+
+function buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) {
+  return (
+    `🏆 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
+    `📊 𝗔𝗦𝗦𝗘𝗧: ${signal.symbol} ${flag}\n` +
+    `💰 𝗘𝗡𝗧𝗥𝗬: ${entryPrice.toFixed(5)}\n` +
+    `🎯 𝗖𝗟𝗢𝗦𝗘: ${exitPrice.toFixed(5)}\n\n` +
+    `🏆 𝗥𝗘𝗦𝗨𝗟𝗧: ${isWin ? '✅ 𝗪𝗜𝗡 🎉' : '❌ 𝗟𝗢𝗦𝗦'}\n\n` +
+    `━━━━━━━━━━━━━━━━\n\n` +
+    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜`
+  );
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🎯 ONE SIGNAL ROUND — এখন মাত্র ৩টা ধাপ:
+// ১. Signal caption + chart (একসাথে, ছবির caption হিসেবে)
+// ২. Direction sticker (CALL/PUT)
+// ৩. Signal Result মেসেজ (chart ছাড়া, শুধু টেক্সট)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function runSignalRound(bot, signal, isMTG = false) {
+  const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
+  const flag = pairInfo ? pairInfo.flag : (signal.flag || '');
+
+  // ━━━ ১. Direction reveal টাইমিং পর্যন্ত অপেক্ষা করে entry price + chart+caption একসাথে পাঠানো ━━━
+  console.log(`⏳ Waiting for signal timing (45s)...`);
+  await waitForExactSecond(45);
+
+  const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
+  const badgeType = signal.direction === 'UP' ? 'CALL' : 'PUT';
+
+  await waitForExactSecond(59);
+  let entryPrice = signal.currentPrice;
+  try {
+    const p = await getCurrentPrice(signal.symbol);
+    if (p) entryPrice = p;
+  } catch(e) {}
+  const entryTimeStr = getBDTime().fullTime;
+  console.log(`💰 Entry Price: ${entryPrice} @ ${entryTimeStr}`);
+
+  const subtitle = `M1  •  ${entryTimeStr} (UTC+6)  •  CONFIDENCE ${signal.aiScore}%  •  LIVE MARKET  •  AI Engine v5.0`;
+  const entryChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, subtitle);
+  const caption = buildSignalCaption(signal, flag, entryPrice, entryTimeStr);
+
+  if (entryChart) {
+    await safeSendPhoto(bot, entryChart, caption);
+  } else {
+    await safeSendMessage(bot, caption, { parse_mode: 'Markdown' });
+  }
+
+  // ━━━ ২. Direction sticker ━━━
+  await safeSendSticker(bot, dirSticker);
+  console.log(`✅ ${signal.symbol} ${signal.direction} revealed`);
+
+  // ━━━ পরের candle এর close পর্যন্ত অপেক্ষা (fixed timing) ━━━
+  console.log(`⏳ Waiting for NEXT candle close (~60s)...`);
+  await sleep(55000);
+  await waitForCandleClose();
+  await sleep(1500);
+
+  let exitPrice = entryPrice;
+  try {
+    const p = await getCurrentPrice(signal.symbol);
+    if (p) exitPrice = p;
+  } catch(e) {}
+  console.log(`💰 Exit Price: ${exitPrice}`);
+
+  const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
+  console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
+
+  if (!isMTG) {
+    lastResults.push(isWin);
+    if (lastResults.length > 10) lastResults.shift();
+  }
+  tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
+
+  // ━━━ ৩. Result মেসেজ (টেক্সট, chart ছাড়া) ━━━
+  if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
+  await safeSendMessage(bot, buildResultMessage(signal, flag, entryPrice, exitPrice, isWin), { parse_mode: 'Markdown' });
+
+  return { isWin, entryPrice, exitPrice, flag };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🎯 PRO SIGNAL SENDER — মূল রাউন্ড + (loss হলে) MTG রাউন্ড
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function sendProSignal(bot, signal) {
   const signalKey = generateSignalKey(signal.symbol, signal.direction);
-  if (sentSignals.has(signalKey) && !isMTG) {
+  if (sentSignals.has(signalKey)) {
     console.log(`⚠️ Duplicate signal: ${signalKey}`);
     return null;
   }
-  if (!isMTG) sentSignals.set(signalKey, Date.now());
-
-  const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
-  const flag = pairInfo ? pairInfo.flag : '';
-  const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
+  sentSignals.set(signalKey, Date.now());
 
   try {
-    // ━━━ Signal Message (asset name + score) ━━━
+    // ━━━ মূল রাউন্ড ━━━
+    const main = await runSignalRound(bot, signal, false);
+
+    if (main.isWin) {
+      return true;
+    }
+
+    // ━━━ লস → Recovery Signal নোটিশ ━━━
     await safeSendMessage(bot,
-      `╔════════════════════╗\n` +
-      `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
-      `╚════════════════════╝\n\n` +
-      `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🎯 𝗤𝘅 𝗔𝗜 𝗦𝗖𝗢𝗥𝗘   ➜ ${signal.aiScore}%\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
-      `• Maximum 1 Step MTG\n` +
-      `• Never Overtrade\n` +
-      `━━━━━━━━━━━━━━━━━━━━━━\n` +
-      `🤖 Powered by 𝗤𝘅 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
-      `⚠️ Trade at your own risk.`,
+      `🔄 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟\n\n` +
+      `📊 𝗔𝗦𝗦𝗘𝗧 ➜ ${signal.symbol} ${main.flag}\n` +
+      `⏳ 𝗪𝗔𝗜𝗧 ➜ 𝟯–𝟱 𝗠𝗶𝗻𝘂𝘁𝗲𝘀\n\n` +
+      `⚠️ 𝗣𝗹𝗲𝗮𝘀𝗲 𝘄𝗮𝗶𝘁 𝗳𝗼𝗿 𝘁𝗵𝗲 𝗼𝗳𝗳𝗶𝗰𝗶𝗮𝗹 𝘀𝗶𝗴𝗻𝗮𝗹. 𝗗𝗼 𝗻𝗼𝘁 𝗲𝗻𝘁𝗲𝗿 𝗮𝗻𝘆 𝘁𝗿𝗮𝗱𝗲 𝘂𝗻𝘁𝗶𝗹 𝗰𝗼𝗻𝗳𝗶𝗿𝗺𝗮𝘁𝗶𝗼𝗻`,
       { parse_mode: 'Markdown' }
     );
 
-    console.log(`⏳ Waiting for signal timing (45s)...`);
-    await waitForExactSecond(45);
+    const mtgWaitMs = (3 + Math.random() * 2) * 60 * 1000; // ৩–৫ মিনিট
+    console.log(`⏳ MTG wait: ${Math.round(mtgWaitMs / 1000)}s`);
+    await sleep(mtgWaitMs);
 
-    const dirSticker = isMTG ? (signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN) : (signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT);
-    await safeSendSticker(bot, dirSticker);
-    console.log(`✅ ${signal.symbol} ${dirLabel}${isMTG ? ' (MTG)' : ''}`);
-
-    // ━━━ Entry Price (candle close ~59s) ━━━
-    await waitForExactSecond(59);
-    let entryPrice = signal.currentPrice;
+    // ━━━ একই পেয়ারের জন্য রিফ্রেশড বিশ্লেষণ (MTG সিগন্যাল) ━━━
+    let mtgData = signal;
     try {
-      const p = await getCurrentPrice(signal.symbol);
-      if (p) entryPrice = p;
-    } catch(e) {}
-    console.log(`💰 Entry Price: ${entryPrice}`);
-
-    // ━━━ Live Price Update (নতুন ফরম্যাট) ━━━
-    await safeSendMessage(bot,
-      `💹 **𝗟𝗜𝗩𝗘 𝗣𝗥𝗜𝗖𝗘 𝗨𝗣𝗗𝗔𝗧𝗘**\n\n` +
-      `📊 **Asset:** ${signal.symbol} ${flag}\n` +
-      `💰 **Entry Price:** ${entryPrice.toFixed(5)}\n` +
-      `⏰ **Entry Time:** ${getBDTime().fullTime} (BD)\n\n` +
-      `━━━━━━━━━━━━━━━━\n\n` +
-      `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
-      { parse_mode: 'Markdown' }
-    );
-
-    // ━━━ পরের candle এর close পর্যন্ত অপেক্ষা (fixed timing) ━━━
-    console.log(`⏳ Waiting for NEXT candle close (~60s)...`);
-    await sleep(55000);
-    await waitForCandleClose();
-    await sleep(1500);
-
-    let exitPrice = entryPrice;
-    try {
-      const p = await getCurrentPrice(signal.symbol);
-      if (p) exitPrice = p;
-    } catch(e) {}
-    console.log(`💰 Exit Price: ${exitPrice}`);
-
-    const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
-    console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
-
-    if (!isMTG) {
-      lastResults.push(isWin);
-      if (lastResults.length > 10) lastResults.shift();
-    }
-    tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
-
-    // ━━━ চার্ট (candlestick + EMA + S/R + entry/exit) ━━━
-    const chartBuffer = await generateCandleChart(signal.symbol, signal.candles, entryPrice, exitPrice, isMTG);
-    if (chartBuffer) {
-      await safeSendPhoto(bot, chartBuffer, `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}${isMTG ? ' (MTG)' : ''}`);
+      const fresh = await analyzeSymbol(signal.symbol, false);
+      fresh.flag = main.flag;
+      mtgData = fresh;
+    } catch (e) {
+      console.log(`⚠️ MTG re-analysis failed, using last known direction: ${e.message}`);
     }
 
-    // ━━━ Result Message (নতুন সংক্ষিপ্ত ফরম্যাট) ━━━
-    if (isWin) {
-      if (!isMTG) { await safeSendSticker(bot, STICKERS.SURESHOT); await sleep(600); }
-      await safeSendMessage(bot,
-        `✅ **𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
-        `📊 ${signal.symbol} ${flag}\n` +
-        `🏆 Result: ✅ WIN 🎉\n\n` +
-        `🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬`,
-        { parse_mode: 'Markdown' }
-      );
-    } else {
-      await safeSendMessage(bot,
-        `❌ **𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
-        `📊 ${signal.symbol} ${flag}\n` +
-        `📉 Result: LOSS\n\n` +
-        `${isMTG ? '🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬' : '🔄 Recovery Signal Coming Soon...'}`,
-        { parse_mode: 'Markdown' }
-      );
-      if (!isMTG) await handleMTGRecovery(bot, signal);
-    }
+    // ━━━ MTG রাউন্ড (মূল রাউন্ডের মতোই, কিন্তু MTG sticker নেই — normal CALL/PUT) ━━━
+    const mtgResult = await runSignalRound(bot, mtgData, true);
 
-    return { isWin, entryPrice, exitPrice };
+    // Max 1 Step MTG — এখানেও লস হলে এই সিগন্যাল স্কিপ, পরের নতুন সিগন্যাল খোঁজা হবে
+    return mtgResult.isWin;
 
   } catch (error) {
     console.error(`❌ Signal error for ${signal.symbol}: ${error.message}`);
     return null;
-  }
-}
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔄 MTG RECOVERY SYSTEM
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-async function handleMTGRecovery(bot, originalSignal) {
-  if (isRecoveryMode) { console.log('⚠️ Recovery already in progress'); return; }
-  isRecoveryMode = true;
-  recoveryAttempts = 0;
-
-  const pairInfo = SESSION_PAIRS.find(p => p.symbol === originalSignal.symbol);
-  const flag = pairInfo ? pairInfo.flag : '';
-
-  try {
-    await safeSendMessage(bot,
-      `🔄 **𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟**\n\n` +
-      `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
-      `⏳ **Coming in 3–5 Minutes**\n` +
-      `✅ **Wait for Confirmation**\n\n` +
-      `⚠️ **দয়া করে অফিসিয়াল সিগন্যাল না পাওয়া পর্যন্ত কোনো এন্ট্রি নেবেন না।**`,
-      { parse_mode: 'Markdown' }
-    );
-
-    await sleep(3000);
-    const startTime = Date.now();
-    const maxWaitTime = 5 * 60 * 1000;
-    let foundSignal = false;
-
-    while (Date.now() - startTime < maxWaitTime && recoveryAttempts < MAX_RECOVERY_ATTEMPTS && !foundSignal) {
-      await waitForNewCandle();
-      await sleep(2000);
-      recoveryAttempts++;
-
-      try {
-        const analysis = await analyzeSymbol(originalSignal.symbol, true);
-        const isSameDirection = analysis.direction === originalSignal.direction;
-        const hasGoodConfidence = analysis.aiScore >= 82 && analysis.isValid && analysis.directionsAgree >= 4;
-
-        console.log(`📊 MTG Analysis: ${analysis.symbol} | Dir: ${analysis.direction} | Score: ${analysis.aiScore}% | Valid: ${analysis.isValid}`);
-
-        if (isSameDirection && hasGoodConfidence) {
-          foundSignal = true;
-          await sendProSignal(bot, analysis, true);
-          break;
-        }
-      } catch (error) {
-        console.error(`❌ MTG analysis error: ${error.message}`);
-      }
-
-      if (!foundSignal) await sleep(30 * 1000);
-    }
-
-    if (!foundSignal) {
-      await safeSendMessage(bot,
-        `⏭️ **𝗠𝗧𝗚 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗞𝗜𝗣𝗣𝗘𝗗**\n\n` +
-        `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
-        `⏳ **No good recovery signal found in 5 minutes**`,
-        { parse_mode: 'Markdown' }
-      );
-    }
-  } catch (error) {
-    console.error(`❌ MTG Recovery error: ${error.message}`);
-  } finally {
-    isRecoveryMode = false;
-    recoveryAttempts = 0;
   }
 }
 
@@ -1074,14 +1066,13 @@ async function runSession(bot, sessionName, isManual = false) {
     let lastSignalTime = Date.now();
     const MIN_SIGNAL_GAP = 5 * 60 * 1000;
     const MAX_SIGNAL_GAP = 15 * 60 * 1000;
-    const SESSION_MAX_DURATION = 90 * 60 * 1000; // নিরাপত্তার জন্য উচ্চ সীমা
+    const SESSION_MAX_DURATION = 90 * 60 * 1000;
 
     const sessionStart = Date.now();
 
     while (signalCount < MAX_SIGNALS && Date.now() - sessionStart < SESSION_MAX_DURATION) {
       if (!sessionRunning) { console.log(`⚠️ Session lock lost, stopping`); break; }
 
-      // ✅ টানা ৩টা WIN হলে সেশন close করে দেওয়া
       if (currentWinStreak >= WIN_STREAK_TO_CLOSE) {
         console.log(`🏆 ${WIN_STREAK_TO_CLOSE} consecutive wins — closing session early`);
         break;
@@ -1113,11 +1104,11 @@ async function runSession(bot, sessionName, isManual = false) {
       isFirstSignal = false;
 
       try {
-        const result = await sendProSignal(bot, best, false);
-        if (result !== null && result.isWin !== undefined) {
+        const isWin = await sendProSignal(bot, best);
+        if (isWin !== null) {
           signalCount++;
           lastSignalTime = Date.now();
-          if (result.isWin) { winCount++; currentWinStreak++; }
+          if (isWin) { winCount++; currentWinStreak++; }
           else { lossCount++; currentWinStreak = 0; }
         }
       } catch (e) {
@@ -1133,7 +1124,6 @@ async function runSession(bot, sessionName, isManual = false) {
     await safeSendSticker(bot, STICKERS.SESSION_CLOSE);
     await sleep(800);
 
-    // ━━━ Session Result Message (win/loss অনুযায়ী ভিন্ন) ━━━
     if (winCount > lossCount) {
       await safeSendMessage(bot,
         `🏆 **𝗦𝗘𝗦𝗦𝗜𝗢𝗡 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
@@ -1176,7 +1166,7 @@ async function runSession(bot, sessionName, isManual = false) {
 module.exports = function (bot) {
   if (schedulerInitialized) { console.log('⚠️ Scheduler already initialized'); return; }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v7.0 — 2x daily sessions: 2PM & 9PM BD)');
+  console.log('✅ Scheduler started (v8.0 — TradingView-style chart + streamlined messages)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
@@ -1184,7 +1174,6 @@ module.exports = function (bot) {
     try {
       const { h, m, s, dateKey } = getBDTime();
 
-      // দুপুর ২টা রিমাইন্ডার (১:৩০) ও সেশন (২:০০)
       if (h === 13 && m === 30 && s < 10) {
         const key = generateReminderKey('afternoon_reminder');
         if (!sentReminders.has(key)) {
@@ -1202,7 +1191,6 @@ module.exports = function (bot) {
         }
       }
 
-      // রাত ৯টা রিমাইন্ডার (৮:৩০) ও সেশন (৯:০০)
       if (h === 20 && m === 30 && s < 10) {
         const key = generateReminderKey('night_reminder');
         if (!sentReminders.has(key)) {
