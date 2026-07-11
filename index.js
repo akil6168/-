@@ -1,6 +1,7 @@
-// v19 - Free Trial System
+// v20 - Free Trial System + Affiliate Postback Auto-Verify
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
+const express = require('express');
 const twelveData = require('./twelvedata');
 
 const TOKEN = process.env.BOT_TOKEN;
@@ -35,6 +36,14 @@ let sessionModule;
 // প্রতিটা user এর last signal message id store করার জন্য
 const lastSignalMsgId = new Map();
 
+// ✅ প্রতিটা user এর জন্য সবসময় একটা ক্লিকযোগ্য mention বানানোর হেল্পার —
+// username না থাকলেও tg://user?id= লিংক দিয়ে এক ক্লিকে প্রোফাইলে যাওয়া যায়
+function mentionUser(userId, username, firstName) {
+  const safeName = (firstName || 'User').replace(/[\[\]]/g, '');
+  if (username) return '@' + username + ' ([' + safeName + '](tg://user?id=' + userId + '))';
+  return '[' + safeName + '](tg://user?id=' + userId + ')';
+}
+
 let db;
 async function connectDB() {
   const client = new MongoClient(MONGO_URI);
@@ -65,12 +74,13 @@ async function connectDB() {
   await db.collection('approvedUsers').createIndex({ userId: 1 }, { unique: true });
   await db.collection('bannedUsers').createIndex({ userId: 1 }, { unique: true });
   await db.collection('trialCounts').createIndex({ userId: 1 }, { unique: true });
+  await db.collection('affiliateVerified').createIndex({ traderId: 1 }, { unique: true });
 }
 
-async function addStartedUser(userId) {
+async function addStartedUser(userId, username, firstName) {
   startedUsers.add(userId);
   await db.collection('startedUsers').updateOne(
-    { userId }, { $set: { userId } }, { upsert: true }
+    { userId }, { $set: { userId, username: username || null, firstName: firstName || null } }, { upsert: true }
   );
 }
 
@@ -147,10 +157,10 @@ const trialKeyboard = { remove_keyboard: true };
 const signalInlineKeyboard = {
   inline_keyboard: [
     [
-      { text: '➕ Generate New Signal 📊', callback_data: 'new_signal' },
+      { text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' },
     ],
     [
-      { text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }
+      { text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }
     ]
   ]
 };
@@ -281,56 +291,81 @@ function sendPairMenu(chatId) {
     if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
     keyboard.push(row);
   }
-  bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇', {
+  bot.sendMessage(chatId, '📈 𝗖𝗵𝗼𝗼𝘀𝗲 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖) 👇', {
+    parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: keyboard }
   });
 }
 
 function sendVerifyPrompt(chatId) {
   bot.sendMessage(chatId,
-    '🔒 *Free Trial শেষ হয়েছে!*\n\n' +
-    '✅ আরো signal ও screenshot analysis পেতে *Verify* করুন।\n\n' +
-    '📌 নিচের লিংক থেকে Quotex account খুলে আপনার *8-digit Trader ID* পাঠান।',
+    '🔒 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝘅𝗽𝗶𝗿𝗲𝗱!\n\n' +
+    '🚀 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹𝘀 & 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀.\n\n' +
+    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗮𝗻𝗱 𝘀𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘃𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻.',
     {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
-          [{ text: '✅ Verify Trader ID', callback_data: '/verify' }]
+          [{ text: '🚀 𝗖𝗿𝗲𝗮𝘁𝗲 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
+          [{ text: '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗', callback_data: '/verify' }]
         ]
       }
     }
   );
 }
 
-// Loading bar steps
-const loadingSteps = [
-  { emoji: '📡', percent: 0,   bar: '░░░░░░░░░░', label: 'Connecting to live market...' },
-  { emoji: '📊', percent: 20,  bar: '██░░░░░░░░', label: 'Collecting price data...' },
-  { emoji: '📈', percent: 40,  bar: '████░░░░░░', label: 'Analyzing market trend...' },
-  { emoji: '🧠', percent: 60,  bar: '██████░░░░', label: 'Calculating indicators...' },
-  { emoji: '⚡', percent: 80,  bar: '████████░░', label: 'Finding best entry...' },
-  { emoji: '🔍', percent: 100, bar: '██████████', label: 'Final confirmation...' }
+// Deep Analysis স্টেপ
+const deepAnalysisSteps = [
+  '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
+  '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...',
+  '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...'
 ];
 
 async function runLoadingBar(chatId) {
-  const msg = await bot.sendMessage(chatId,
-    '📡 MARKET ANALYSING...\n\n[░░░░░░░░░░] 0%\nConnecting to live market...'
+  // ধাপ ১ — প্রাথমিক লোডিং মেসেজ
+  const bd0 = new Date(Date.now() + 6 * 60 * 60 * 1000);
+  const bdStr = String(bd0.getUTCHours()).padStart(2,'0') + ':' + String(bd0.getUTCMinutes()).padStart(2,'0') + ':' + String(bd0.getUTCSeconds()).padStart(2,'0');
+
+  const loadMsg = await bot.sendMessage(chatId,
+    '🚀 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁 𝗗𝗮𝘁𝗮...\n\n' +
+    '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲: ' + bdStr + '\n' +
+    '📊 𝗣𝗹𝗲𝗮𝘀𝗲 𝗪𝗮𝗶𝘁...',
+    { parse_mode: 'Markdown' }
   );
-  const msgId = msg.message_id;
+  const loadMsgId = loadMsg.message_id;
 
-  for (let i = 1; i < loadingSteps.length; i++) {
-    await new Promise(r => setTimeout(r, 500));
-    const s = loadingSteps[i];
-    try {
-      await bot.editMessageText(
-        s.emoji + ' MARKET ANALYSING...\n\n[' + s.bar + '] ' + s.percent + '%\n' + s.label,
-        { chat_id: chatId, message_id: msgId }
-      );
-    } catch (e) {}
-  }
+  await new Promise(r => setTimeout(r, 1500));
 
-  return msgId;
+  // ধাপ ২ — Deep Analysis (countdown সহ)
+  const startTime = Date.now();
+  const totalWaitMs = 20000; // মোট ~20 সেকেন্ড analysis সময়
+
+  return new Promise((resolve) => {
+    const interval = setInterval(async () => {
+      const elapsed = Date.now() - startTime;
+      const remaining = Math.max(0, Math.ceil((totalWaitMs - elapsed) / 1000));
+      const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      const bdTimeStr = String(bd.getUTCHours()).padStart(2,'0') + ':' + String(bd.getUTCMinutes()).padStart(2,'0') + ':' + String(bd.getUTCSeconds()).padStart(2,'0');
+
+      const stepIndex = Math.min(deepAnalysisSteps.length - 1, Math.floor((elapsed / totalWaitMs) * deepAnalysisSteps.length));
+      const visibleSteps = deepAnalysisSteps.slice(0, stepIndex + 1).join('\n');
+
+      try {
+        await bot.editMessageText(
+          '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
+          '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲: ' + bdTimeStr + '\n' +
+          '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻: ' + remaining + 's\n\n' +
+          visibleSteps,
+          { chat_id: chatId, message_id: loadMsgId, parse_mode: 'Markdown' }
+        );
+      } catch (e) {}
+
+      if (elapsed >= totalWaitMs) {
+        clearInterval(interval);
+        resolve(loadMsgId);
+      }
+    }, 1000);
+  });
 }
 
 // /maintenance
@@ -361,6 +396,7 @@ bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const firstName = msg.from.first_name || 'User';
   const userId = msg.from.id;
+  const usernameHandle = msg.from.username || null;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
     await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
@@ -371,26 +407,35 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
   if (!startedUsers.has(userId)) {
-    await addStartedUser(userId);
+    await addStartedUser(userId, usernameHandle, firstName);
     await bot.sendMessage(ADMIN_ID,
-      '♻️ *NEW USER STARTED BOT* ➕\n\n👤 Name: ' + firstName + '\n🆔 ID: `' + userId + '`',
+      '♻️ *NEW USER STARTED BOT* ➕\n\n👤 Name: ' + mentionUser(userId, usernameHandle, firstName) + '\n🆔 ID: `' + userId + '`',
       { parse_mode: 'Markdown' }
     );
   }
 
+  const welcomeCore =
+    '╭━━━〔 🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬 〕━━━╮\n\n' +
+    '⚡ 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 𝗦𝘆𝘀𝘁𝗲𝗺\n' +
+    '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+    '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+    '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n';
+
   if (isApproved(userId)) {
     await bot.sendMessage(chatId,
-      '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n📊 Trading signals পেতে নিচের বাটনে ক্লিক করুন।',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: approvedKeyboard
-      }
+      welcomeCore +
+      '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅\n\n' +
+      '╰━━━━━━━━━━━━━━━━━━━━╯\n\n' +
+      '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
+      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
-    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+    await bot.sendMessage(chatId, ' ', {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
-          [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+          [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
         ]
       }
     });
@@ -402,21 +447,22 @@ bot.onText(/\/start/, async (msg) => {
 
   if (signalLeft > 0 || screenshotLeft > 0) {
     await bot.sendMessage(chatId,
-      '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n' +
-      '🎁 *Free Trial:*\n' +
-      '📊 Signal বাকি: *' + signalLeft + '/' + FREE_TRIAL_SIGNAL + '*\n' +
-      '📸 Screenshot বাকি: *' + screenshotLeft + '/' + FREE_TRIAL_SCREENSHOT + '*\n\n' +
-      '💡 Verify করলে unlimited access পাবেন!',
-      {
-        parse_mode: 'Markdown',
-        reply_markup: trialKeyboard
-      }
+      welcomeCore +
+      '🎁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹\n' +
+      '📈 𝗦𝗶𝗴𝗻𝗮𝗹𝘀 𝗟𝗲𝗳𝘁: 𝟬' + signalLeft + '/𝟬' + FREE_TRIAL_SIGNAL + '\n' +
+      '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: 𝟬' + screenshotLeft + '/𝟬' + FREE_TRIAL_SCREENSHOT + '\n\n' +
+      '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 🚀\n\n' +
+      '╰━━━━━━━━━━━━━━━━━━━━╯\n\n' +
+      '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
+      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
     );
-    await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+    await bot.sendMessage(chatId, ' ', {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
-          [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+          [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
         ]
       }
     });
@@ -424,15 +470,16 @@ bot.onText(/\/start/, async (msg) => {
   }
 
   await bot.sendMessage(chatId,
-    '⚡ *AI Signal System*\n📊 *নির্ভুল Trade Analysis*\n📸 *Screenshot দিয়ে Chart বিশ্লেষণ*\n👑 *Premium VIP সুবিধা*\n\n' +
-    '💡 নিচে দেওয়া লিংক থেকে একাউন্ট খুলে 📌 আপনার *8-digit Trader ID* পাঠান verification এর জন্য।\n\n' +
-    '✅ Verify করলেই সব feature unlock হবে।',
+    welcomeCore +
+    '🔒 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝘅𝗽𝗶𝗿𝗲𝗱!\n\n' +
+    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗮𝗻𝗱 𝘀𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘃𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻.\n\n' +
+    '╰━━━━━━━━━━━━━━━━━━━━╯',
     {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '🚀 Create Quotex Account', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
-          [{ text: '✅ Verify Trader ID', callback_data: '/verify' }]
+          [{ text: '🚀 𝗖𝗿𝗲𝗮𝘁𝗲 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
+          [{ text: '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗', callback_data: '/verify' }]
         ]
       }
     }
@@ -463,6 +510,7 @@ bot.onText(/\/admin/, async (msg) => {
           [{ text: '✅ Approved Users', callback_data: 'admin_approved' }],
           [{ text: '⏳ Pending Verify List', callback_data: 'admin_pending' }],
           [{ text: '📋 Trader ID Submissions', callback_data: 'admin_submissions' }],
+          [{ text: '⚡ Affiliate Verified List', callback_data: 'admin_affiliate' }],
           [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }],
           [{ text: '💬 Message a User', callback_data: 'admin_message_prompt' }],
           [{ text: '❌ Unapprove User', callback_data: 'admin_unapprove_prompt' }],
@@ -557,7 +605,8 @@ bot.on('message', async (msg) => {
   const text = msg.text;
   const userId = msg.from.id;
   const firstName = msg.from.first_name || 'User';
-  const username = msg.from.username ? '@' + msg.from.username : '[' + firstName + '](tg://user?id=' + userId + ')';
+  const usernameHandle = msg.from.username || null;
+  const username = mentionUser(userId, usernameHandle, firstName);
 
   if (!text || text.startsWith('/')) return;
 
@@ -569,8 +618,6 @@ bot.on('message', async (msg) => {
     await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।');
     return;
   }
-
-
 
   if (broadcastMode.has(userId) && userId === ADMIN_ID) {
     broadcastMode.delete(userId);
@@ -653,11 +700,11 @@ bot.on('message', async (msg) => {
         '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
         { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
-      await bot.sendMessage(chatId, '📊 Choose Trading Pair (OTC) 👇 অথবা Screenshot Analysis করুন:', {
+      await bot.sendMessage(chatId, ' ', {
         reply_markup: {
           inline_keyboard: [
-            [{ text: '➕ Generate New Signal 📊', callback_data: 'new_signal' }],
-            [{ text: '📸 Screenshot Analysis', callback_data: 'screenshot_analysis' }]
+            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
           ]
         }
       });
@@ -669,16 +716,36 @@ bot.on('message', async (msg) => {
 
   if (!verifyMode.has(userId)) return;
 
-  if (!/^\d{8}$/.test(text)) {
-    await bot.sendMessage(chatId, '❌ ভুল Trader ID\n\n🔐 আপনার 8-digit Quotex Trader ID পাঠান 👇');
+  if (!/^\d{6,10}$/.test(text)) {
+    await bot.sendMessage(chatId, '🔐 𝗣𝗹𝗲𝗮𝘀𝗲 𝗦𝗲𝗻𝗱 𝗬𝗼𝘂𝗿 𝟴-𝗗𝗶𝗴𝗶𝘁 𝗤𝘂𝗼𝘁𝗲𝘅 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 👇', { parse_mode: 'Markdown' });
     return;
   }
 
   verifyMode.delete(userId);
-  await addSubmission({ userId, name: firstName, username: msg.from.username || null, traderId: text, time: new Date().toISOString() });
+
+  // ✅ Affiliate postback list এ চেক করা — থাকলে সাথে সাথেই auto-approve
+  const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
+
+  if (affRecord) {
+    const apiKey = generateApiKey();
+    passwordMode.set(userId, apiKey);
+    await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), autoVerified: true });
+    await bot.sendMessage(chatId,
+      '✅ *আপনার Trader ID স্বয়ংক্রিয়ভাবে verify হয়েছে!*\n\n🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`',
+      { parse_mode: 'Markdown' }
+    );
+    await bot.sendMessage(ADMIN_ID,
+      '⚡ *AUTO-VERIFIED (Affiliate Postback)*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  // Affiliate list এ না থাকলে আগের মতোই ম্যানুয়াল approval flow
+  await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(ADMIN_ID,
-    '🔔 *NEW TRADER ID SUBMISSION*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n\n✅ Approve: `/approve ' + userId + '`',
+    '🔔 *NEW TRADER ID SUBMISSION*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n\n⚠️ Affiliate list এ পাওয়া যায়নি — ম্যানুয়ালি চেক করুন।\n\n✅ Approve: `/approve ' + userId + '`',
     { parse_mode: 'Markdown' }
   );
   await bot.sendMessage(chatId,
@@ -706,41 +773,24 @@ async function generateSignalForPair(chatId, userId, pair) {
     }
 
     // Trial check
+    let isLastTrial = false;
     if (!isApproved(userId)) {
-      if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
+      if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); signalInProgress.delete(userId); return; }
       await incrementTrialSignal(userId);
       const left = getTrialSignalLeft(userId);
       if (left === 0) {
-        await bot.sendMessage(chatId, '⚠️ এটা আপনার *শেষ Free Trial signal!*\n\nVerify করুন unlimited access পেতে।', { parse_mode: 'Markdown' });
+        isLastTrial = true;
+        await bot.sendMessage(chatId,
+          '⚠️ 𝗟𝗮𝘀𝘁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗦𝗶𝗴𝗻𝗮𝗹!\n\n✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗡𝗼𝘄 𝘁𝗼 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀. 🚀',
+          { parse_mode: 'Markdown' }
+        );
       }
     }
 
-    // Loading bar
+    // Loading + Deep Analysis (নতুন combined ফরম্যাট)
     const loadMsgId = await runLoadingBar(chatId);
 
-    // Clock
-    const clockMsg = await bot.sendMessage(chatId, '🕐 Signal generating...\n\n⏰ Bangladesh Time: --:--:--');
-    const clockId = clockMsg.message_id;
-    await new Promise((resolve) => {
-      const clockInterval = setInterval(async () => {
-        const now = new Date();
-        const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
-        const h = String(bd.getUTCHours()).padStart(2, '0');
-        const m = String(bd.getUTCMinutes()).padStart(2, '0');
-        const s = String(bd.getUTCSeconds()).padStart(2, '0');
-        try {
-          await bot.editMessageText(
-            '🕐 Signal generating...\n\n⏰ Bangladesh Time: ' + h + ':' + m + ':' + s,
-            { chat_id: chatId, message_id: clockId }
-          );
-        } catch (e) {}
-        // ৫৫ সেকেন্ডের পর যেকোনো সময় বের হয়ে যাবে — নাহলে সেকেন্ড 59 এ শুরু হলে প্রায় ১ মিনিট আটকে থাকবে
-        if (bd.getUTCSeconds() >= 55) { clearInterval(clockInterval); resolve(); }
-      }, 1000);
-    });
-
     try { await bot.deleteMessage(chatId, loadMsgId); } catch (e) {}
-    try { await bot.deleteMessage(chatId, clockId); } catch (e) {}
 
     let signal;
     try {
@@ -828,8 +878,9 @@ bot.on('callback_query', async (query) => {
   }
 
   if (pair === 'admin_total' && userId === ADMIN_ID) {
+    const affCount = await db.collection('affiliateVerified').countDocuments();
     await bot.sendMessage(ADMIN_ID,
-      '👥 *TOTAL USERS*\n\n📊 Total Started: `' + startedUsers.size + '`\n✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n🚫 Total Banned: `' + bannedUsers.size + '`\n📋 Total Submissions: `' + submissions.length + '`',
+      '👥 *TOTAL USERS*\n\n📊 Total Started: `' + startedUsers.size + '`\n✅ Total Approved: `' + (approvedUsers.size - 1) + '`\n🚫 Total Banned: `' + bannedUsers.size + '`\n📋 Total Submissions: `' + submissions.length + '`\n⚡ Affiliate Verified: `' + affCount + '`',
       { parse_mode: 'Markdown' }
     );
     return;
@@ -841,7 +892,7 @@ bot.on('callback_query', async (query) => {
     let text = '✅ *APPROVED USERS*\n\n';
     list.forEach((uid, i) => {
       const sub = submissions.find(s => s.userId === uid);
-      const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
+      const uname = mentionUser(uid, sub ? sub.username : null, sub ? sub.name : 'Unknown');
       const traderId = sub ? sub.traderId : 'N/A';
       text += (i + 1) + '. ' + uname + '\n🆔 User: `' + uid + '`\n📌 Trader ID: `' + traderId + '`\n\n';
     });
@@ -854,7 +905,7 @@ bot.on('callback_query', async (query) => {
     if (pending.length === 0) { await bot.sendMessage(ADMIN_ID, '⏳ কোনো pending user নেই।'); return; }
     let text = '⏳ *PENDING VERIFY LIST*\n\n';
     pending.forEach((s, i) => {
-      const uname = s.username ? '@' + s.username : s.name;
+      const uname = mentionUser(s.userId, s.username, s.name);
       text += (i + 1) + '. ' + uname + '\n🆔 `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
@@ -865,8 +916,20 @@ bot.on('callback_query', async (query) => {
     if (submissions.length === 0) { await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।'); return; }
     let text = '📋 *TRADER ID SUBMISSIONS*\n\n';
     submissions.forEach((s, i) => {
-      const uname = s.username ? '@' + s.username : s.name;
-      text += (i + 1) + '. ' + uname + '\n🆔 User: `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
+      const uname = mentionUser(s.userId, s.username, s.name);
+      const autoTag = s.autoVerified ? ' ⚡' : '';
+      text += (i + 1) + '. ' + uname + autoTag + '\n🆔 User: `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
+    });
+    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_affiliate' && userId === ADMIN_ID) {
+    const affList = await db.collection('affiliateVerified').find().sort({ receivedAt: -1 }).limit(30).toArray();
+    if (affList.length === 0) { await bot.sendMessage(ADMIN_ID, '⚡ কোনো affiliate postback পাওয়া যায়নি এখনো।'); return; }
+    let text = '⚡ *AFFILIATE VERIFIED (সর্বশেষ 30)*\n\n';
+    affList.forEach((a, i) => {
+      text += (i + 1) + '. 📌 Trader ID: `' + a.traderId + '`\n📊 Status: `' + (a.status || 'unknown') + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -906,7 +969,7 @@ bot.on('callback_query', async (query) => {
     else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
-        const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
+        const uname = mentionUser(uid, sub ? sub.username : null, sub ? sub.name : 'Unknown');
         text += (i + 1) + '. ' + uname + ' — `' + uid + '`\n';
       });
       text += '\n📌 যে user কে unapprove করতে চাও তার *User ID* পাঠাও:';
@@ -923,7 +986,7 @@ bot.on('callback_query', async (query) => {
     else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
-        const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
+        const uname = mentionUser(uid, sub ? sub.username : null, sub ? sub.name : 'Unknown');
         text += (i + 1) + '. ' + uname + ' — `' + uid + '`\n';
       });
       text += '\n📌 যে user কে ban করতে চাও তার *User ID* পাঠাও:';
@@ -940,7 +1003,7 @@ bot.on('callback_query', async (query) => {
     else {
       list.forEach((uid, i) => {
         const sub = submissions.find(s => s.userId === uid);
-        const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'Unknown');
+        const uname = mentionUser(uid, sub ? sub.username : null, sub ? sub.name : 'Unknown');
         text += (i + 1) + '. ' + uname + ' — `' + uid + '`\n';
       });
       text += '\n📌 যে user কে unban করতে চাও তার *User ID* পাঠাও:';
@@ -951,7 +1014,7 @@ bot.on('callback_query', async (query) => {
 
   if (pair === '/verify') {
     verifyMode.add(userId);
-    await bot.sendMessage(chatId, '🔐 আপনার 8-digit Quotex Trader ID পাঠান 👇');
+    await bot.sendMessage(chatId, '🔐 𝗣𝗹𝗲𝗮𝘀𝗲 𝗦𝗲𝗻𝗱 𝗬𝗼𝘂𝗿 𝟴-𝗗𝗶𝗴𝗶𝘁 𝗤𝘂𝗼𝘁𝗲𝘅 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 👇', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -970,10 +1033,45 @@ bot.on('sticker', async (msg) => {
     { parse_mode: 'Markdown' }
   );
 });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔗 QUOTEX AFFILIATE POSTBACK SERVER
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+
+app.get('/postback', async (req, res) => {
+  try {
+    const { status, uid, eid, cid, lid } = req.query;
+    console.log('📩 Postback received:', req.query);
+
+    if (uid && db) {
+      await db.collection('affiliateVerified').updateOne(
+        { traderId: String(uid) },
+        { $set: { traderId: String(uid), status: status || 'unknown', eventId: eid || null, receivedAt: new Date() } },
+        { upsert: true }
+      );
+      console.log(`✅ Trader ID ${uid} saved as affiliate-verified (status: ${status})`);
+    } else {
+      console.log('⚠️ Postback received without uid or DB not ready');
+    }
+
+    res.status(200).send('OK');
+  } catch (e) {
+    console.error('❌ Postback error:', e.message);
+    res.status(500).send('Error');
+  }
+});
+
+app.get('/', (req, res) => res.send('Bot is running.'));
+
+app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT}`));
+
 connectDB().then(() => {
   sessionModule = require('./session');
   sessionModule(bot);
-  console.log('Bot running v19 - Free Trial System Added...');
+  console.log('Bot running v20 - Free Trial System + Affiliate Postback Auto-Verify...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
