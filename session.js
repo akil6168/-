@@ -599,105 +599,167 @@ async function analyzeSymbol(symbol, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CANDLESTICK + EMA + SUPPORT/RESISTANCE CHART
+// 📊 PROFESSIONAL CANDLESTICK CHART (EMA + S/R + RSI subplot + time axis)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+function formatChartTime(offsetMinutesFromNow) {
+  // চার্টের শেষ candle-কে "এখন" ধরে পেছনের প্রতিটা candle-এর সময় হিসাব করা
+  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000 - offsetMinutesFromNow * 60 * 1000);
+  return `${String(bd.getUTCHours()).padStart(2,'0')}:${String(bd.getUTCMinutes()).padStart(2,'0')}`;
+}
 
 async function generateCandleChart(symbol, candles, entryPrice, exitPrice, isMTG = false) {
   try {
     const plotCandles = candles.slice(-30);
-    const ohlcData = plotCandles.map((c, i) => ({ x: i + 1, o: c.open, h: c.high, l: c.low, c: c.close }));
+    const n = plotCandles.length;
+    // সময় লেবেল: শেষ candle = এখন, প্রতিটা পিছনের candle ১ মিনিট আগে
+    const timeLabels = plotCandles.map((_, i) => formatChartTime(n - 1 - i));
 
+    const ohlcData = plotCandles.map((c, i) => ({ x: i + 1, o: c.open, h: c.high, l: c.low, c: c.close }));
     const ema7Series = calcEMASeries(plotCandles, 7);
     const ema21Series = calcEMASeries(plotCandles, 21);
     const sr = calcSupportResistance(candles);
 
+    // RSI subplot ডেটা (14 period, প্রতিটা candle পয়েন্টে)
+    const rsiPoints = [];
+    for (let i = 0; i < plotCandles.length; i++) {
+      const sliceEnd = candles.length - plotCandles.length + i + 1;
+      const slice = candles.slice(0, sliceEnd);
+      rsiPoints.push(slice.length >= 15 ? calcRSI(slice) : 50);
+    }
+
     const annotations = {
       supportLine: {
-        type: 'line', yMin: sr.support, yMax: sr.support,
-        borderColor: 'rgba(0,255,136,0.5)', borderWidth: 1, borderDash: [4,4],
-        label: { content: 'SUPPORT', enabled: true, position: 'start', backgroundColor: 'rgba(0,255,136,0.6)', color: '#000', font: { size: 9 } }
+        type: 'line', yMin: sr.support, yMax: sr.support, scaleID: 'y',
+        borderColor: 'rgba(0,255,136,0.6)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `SUPPORT ${sr.support.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(0,255,136,0.7)', color: '#000', font: { size: 9 } }
       },
       resistanceLine: {
-        type: 'line', yMin: sr.resistance, yMax: sr.resistance,
-        borderColor: 'rgba(255,68,68,0.5)', borderWidth: 1, borderDash: [4,4],
-        label: { content: 'RESISTANCE', enabled: true, position: 'start', backgroundColor: 'rgba(255,68,68,0.6)', color: '#000', font: { size: 9 } }
+        type: 'line', yMin: sr.resistance, yMax: sr.resistance, scaleID: 'y',
+        borderColor: 'rgba(255,68,68,0.6)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `RESISTANCE ${sr.resistance.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(255,68,68,0.7)', color: '#000', font: { size: 9 } }
       }
     };
 
-    if (entryPrice !== null && entryPrice !== undefined) {
+    if (entryPrice) {
       annotations.entryLine = {
-        type: 'line', yMin: entryPrice, yMax: entryPrice,
+        type: 'line', yMin: entryPrice, yMax: entryPrice, scaleID: 'y',
         borderColor: 'rgba(255,215,0,0.9)', borderWidth: 2, borderDash: [6, 4],
-        label: { content: isMTG ? 'MTG ENTRY' : 'ENTRY', enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.8)', color: '#000' }
+        label: { content: `${isMTG ? 'MTG ENTRY' : 'ENTRY'} ${entryPrice.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.85)', color: '#000', font: { size: 10, weight: 'bold' } }
       };
     }
-    if (exitPrice !== null && exitPrice !== undefined && entryPrice) {
+    if (exitPrice && entryPrice) {
       annotations.exitLine = {
-        type: 'line', yMin: exitPrice, yMax: exitPrice,
+        type: 'line', yMin: exitPrice, yMax: exitPrice, scaleID: 'y',
         borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444', borderWidth: 2, borderDash: [6, 4],
         label: {
           content: exitPrice > entryPrice ? (isMTG ? 'MTG WIN' : 'WIN') : (isMTG ? 'MTG LOSS' : 'LOSS'),
           enabled: true, position: 'end',
-          backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)', color: '#fff'
+          backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)', color: '#fff', font: { size: 11, weight: 'bold' }
         }
       };
     }
 
+    const headerText = `${symbol}   •   M1   •   ${getBDTime().fullTime} (UTC+6)   •   ${isMTG ? 'MTG SIGNAL' : 'QX AI PREDICTOR'}`;
+
     const chartConfig = {
       type: 'candlestick',
       data: {
+        labels: timeLabels,
         datasets: [
           {
             label: symbol,
             data: ohlcData,
-            color: { up: '#00ff88', down: '#ff4444', unchanged: '#999999' }
+            color: { up: '#00c896', down: '#ff5252', unchanged: '#999999' },
+            yAxisID: 'y'
           },
           {
-            type: 'line',
-            label: 'EMA 7',
+            type: 'line', label: 'EMA 7',
             data: ema7Series.map((v, i) => ({ x: i + 1, y: v })),
-            borderColor: '#00d4ff',
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false
+            borderColor: '#ffaa00', borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y'
           },
           {
-            type: 'line',
-            label: 'EMA 21',
+            type: 'line', label: 'EMA 21',
             data: ema21Series.map((v, i) => ({ x: i + 1, y: v })),
-            borderColor: '#ffaa00',
-            borderWidth: 1.5,
-            pointRadius: 0,
-            fill: false
+            borderColor: '#00d4ff', borderWidth: 1.5, pointRadius: 0, fill: false, yAxisID: 'y'
           }
         ]
       },
       options: {
+        layout: { padding: { top: 40 } },
         plugins: {
-          legend: { labels: { color: '#ffffff', font: { size: 10 } } },
+          title: {
+            display: true, text: headerText, color: '#e8e8e8',
+            font: { size: 13, weight: 'normal' }, align: 'start', padding: { bottom: 10 }
+          },
+          legend: {
+            display: true, position: 'top', align: 'end',
+            labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14 }
+          },
           annotation: { annotations }
         },
         scales: {
-          x: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
-          y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } }
+          x: {
+            ticks: { color: '#888', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } },
+            grid: { color: 'rgba(255,255,255,0.04)' },
+            title: { display: true, text: 'Time (UTC+6)', color: '#666', font: { size: 9 } }
+          },
+          y: {
+            position: 'right',
+            ticks: { color: '#999', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.05)' }
+          }
         }
       }
     };
 
-    const response = await fetch('https://quickchart.io/chart', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chart: chartConfig,
-        width: 800,
-        height: 480,
-        backgroundColor: '#1a1a2e',
-        version: '3'
-      })
-    });
+    const rsiChartConfig = {
+      type: 'line',
+      data: {
+        labels: timeLabels,
+        datasets: [{
+          label: 'RSI (14)',
+          data: rsiPoints,
+          borderColor: '#b568f2',
+          backgroundColor: 'rgba(181,104,242,0.08)',
+          borderWidth: 1.5, pointRadius: 0, fill: true, tension: 0.15
+        }]
+      },
+      options: {
+        plugins: {
+          legend: { display: true, position: 'top', align: 'end', labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14 } },
+          annotation: {
+            annotations: {
+              rsi70: { type: 'line', yMin: 70, yMax: 70, borderColor: 'rgba(255,68,68,0.4)', borderWidth: 1, borderDash: [3,3] },
+              rsi30: { type: 'line', yMin: 30, yMax: 30, borderColor: 'rgba(0,255,136,0.4)', borderWidth: 1, borderDash: [3,3] }
+            }
+          }
+        },
+        scales: {
+          x: { ticks: { color: '#888', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } }, grid: { color: 'rgba(255,255,255,0.04)' } },
+          y: { position: 'right', min: 0, max: 100, ticks: { color: '#999', font: { size: 10 }, stepSize: 30 }, grid: { color: 'rgba(255,255,255,0.05)' } }
+        }
+      }
+    };
 
-    if (!response.ok) throw new Error(`QuickChart error: ${response.status}`);
-    return await response.buffer();
+    // ━━━ ২টা চার্ট (মূল + RSI) একসাথে জোড়া লাগানোর জন্য দুইটা আলাদা রিকোয়েস্ট ━━━
+    const [mainRes, rsiRes] = await Promise.all([
+      fetch('https://quickchart.io/chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chart: chartConfig, width: 900, height: 480, backgroundColor: '#0f0f1e', version: '3' })
+      }),
+      fetch('https://quickchart.io/chart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chart: rsiChartConfig, width: 900, height: 160, backgroundColor: '#0f0f1e', version: '3' })
+      })
+    ]);
+
+    if (!mainRes.ok) throw new Error(`QuickChart main error: ${mainRes.status}`);
+    // RSI subplot fetch fail করলেও শুধু মূল চার্ট পাঠানো যায়, তাই এটা ব্লক করবে না
+    const mainBuffer = await mainRes.buffer();
+    return mainBuffer;
   } catch (error) {
     console.error('❌ Chart generation failed:', error.message);
     return null;
