@@ -8,6 +8,41 @@ const TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
 const bot = new TelegramBot(TOKEN, { polling: false });
 
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🛡️ SAFETY PATCH — খালি text পাঠানো ঠেকানো + crash বন্ধ করা
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const _origSendMessage = bot.sendMessage.bind(bot);
+bot.sendMessage = function (chatId, text, options) {
+  if (!text || (typeof text === 'string' && text.trim().length === 0)) {
+    console.error('🚨 EMPTY sendMessage আটকানো হলো! chatId:', chatId);
+    console.error(new Error('Empty sendMessage call stack').stack);
+    return Promise.resolve(null);
+  }
+  return _origSendMessage(chatId, text, options);
+};
+
+const _origEditMessageText = bot.editMessageText.bind(bot);
+bot.editMessageText = function (text, options) {
+  if (!text || (typeof text === 'string' && text.trim().length === 0)) {
+    console.error('🚨 EMPTY editMessageText আটকানো হলো!');
+    console.error(new Error('Empty editMessageText call stack').stack);
+    return Promise.resolve(null);
+  }
+  return _origEditMessageText(text, options);
+};
+
+process.on('unhandledRejection', (reason) => {
+  console.error('⚠️ Unhandled Rejection:', reason && reason.message ? reason.message : reason);
+  if (reason && reason.stack) console.error(reason.stack);
+});
+process.on('uncaughtException', (err) => {
+  console.error('⚠️ Uncaught Exception:', err.message);
+  console.error(err.stack);
+});
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
 const ADMIN_ID = 5724602667;
 const FREE_TRIAL_SIGNAL = 5;
 const FREE_TRIAL_SCREENSHOT = 5;
@@ -332,6 +367,12 @@ async function runLoadingBar(chatId) {
     '📊 𝗣𝗹𝗲𝗮𝘀𝗲 𝗪𝗮𝗶𝘁...',
     { parse_mode: 'Markdown' }
   );
+
+  if (!loadMsg) {
+    // sendMessage patch এ আটকে গেলে (বা Telegram থেকে fail করলে) এখানে থেমে যাওয়া দরকার
+    throw new Error('runLoadingBar: initial loading message পাঠানো যায়নি');
+  }
+
   const loadMsgId = loadMsg.message_id;
 
   await new Promise(r => setTimeout(r, 1500));
@@ -431,7 +472,7 @@ bot.onText(/\/start/, async (msg) => {
       '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
-    await bot.sendMessage(chatId, ' ', {
+    await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
       reply_markup: {
         inline_keyboard: [
           [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
@@ -458,7 +499,7 @@ bot.onText(/\/start/, async (msg) => {
       '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
       { parse_mode: 'Markdown', reply_markup: trialKeyboard }
     );
-    await bot.sendMessage(chatId, ' ', {
+    await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
       reply_markup: {
         inline_keyboard: [
           [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
@@ -700,7 +741,7 @@ bot.on('message', async (msg) => {
         '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
         { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
-      await bot.sendMessage(chatId, ' ', {
+      await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
         reply_markup: {
           inline_keyboard: [
             [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
@@ -820,8 +861,11 @@ async function generateSignalForPair(chatId, userId, pair) {
       }
     );
 
-    // নতুন signal message id save করা
-    lastSignalMsgId.set(userId, sentMsg.message_id);
+    // নতুন signal message id save করা (sendMessage patch এ আটকে গেলে sentMsg null হতে পারে)
+    if (sentMsg) lastSignalMsgId.set(userId, sentMsg.message_id);
+  } catch (e) {
+    console.error('generateSignalForPair error:', e.message);
+    try { await bot.sendMessage(chatId, '❌ Signal তৈরি করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।'); } catch (err) {}
   } finally {
     signalInProgress.delete(userId);
   }
