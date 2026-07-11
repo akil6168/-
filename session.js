@@ -1,4 +1,4 @@
-// session.js - Qx AI Predictor VIP Session (v6.1 + High Accuracy Indicators + Fixed Timing)
+// session.js - Qx AI Predictor VIP Session (v7.0 - Full Chart + New Templates + Dynamic Close)
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -35,16 +35,17 @@ const SESSION_PAIRS = [
 ];
 
 const MARKET_SESSIONS = {
-  LONDON: { OPEN: 14, CLOSE: 23, BEST_HOURS: [15,16,17,18,19,20], PAIRS: ['EUR/USD','GBP/USD','EUR/GBP','EUR/JPY','GBP/JPY'] },
-  NEWYORK: { OPEN: 19, CLOSE: 4, BEST_HOURS: [20,21,22,23,0], PAIRS: ['EUR/USD','GBP/USD','USD/JPY','USD/CHF'] },
-  TOKYO: { OPEN: 6, CLOSE: 15, BEST_HOURS: [7,8,9,10,11], PAIRS: ['USD/JPY','EUR/JPY','GBP/JPY','AUD/USD'] }
+  LONDON: { OPEN: 14, CLOSE: 23, PAIRS: ['EUR/USD','GBP/USD','EUR/GBP','EUR/JPY','GBP/JPY'] },
+  NEWYORK: { OPEN: 19, CLOSE: 4, PAIRS: ['EUR/USD','GBP/USD','USD/JPY','USD/CHF'] },
+  TOKYO: { OPEN: 6, CLOSE: 15, PAIRS: ['USD/JPY','EUR/JPY','GBP/JPY','AUD/USD'] }
 };
 
-const TRADING_SCHEDULE = [
-  { start: 11, end: 14, name: 'Morning Momentum' },
-  { start: 16, end: 20, name: 'London Session' },
-  { start: 21, end: 23, name: 'NY Session' }
-];
+const SESSION_INTRO_MESSAGE =
+  `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬**\n\n` +
+  `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
+  `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
+  `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
+  `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই অনুসরণ করুন।**`;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 📊 PERFORMANCE TRACKER
@@ -67,21 +68,15 @@ class PerformanceTracker {
     this.stats.total++;
     if (isWin) this.stats.wins++; else this.stats.losses++;
     this.stats.winRate = (this.stats.wins / this.stats.total * 100);
-
     if (isMTG) {
       this.stats.mtg.total++;
       if (isWin) this.stats.mtg.wins++; else this.stats.mtg.losses++;
     }
-
     if (!this.stats.pairs[symbol]) this.stats.pairs[symbol] = { wins: 0, losses: 0 };
     if (isWin) this.stats.pairs[symbol].wins++; else this.stats.pairs[symbol].losses++;
-
     if (!this.stats.daily[today]) this.stats.daily[today] = { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
-    if (isWin) {
-      if (isMTG) this.stats.daily[today].mtgWins++; else this.stats.daily[today].wins++;
-    } else {
-      if (isMTG) this.stats.daily[today].mtgLosses++; else this.stats.daily[today].losses++;
-    }
+    if (isWin) { if (isMTG) this.stats.daily[today].mtgWins++; else this.stats.daily[today].wins++; }
+    else { if (isMTG) this.stats.daily[today].mtgLosses++; else this.stats.daily[today].losses++; }
     this.saveStats();
   }
   getStatsMessage() {
@@ -89,7 +84,6 @@ class PerformanceTracker {
     const today = getBDTime().dateKey;
     const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
     const mtgRate = mtg.total > 0 ? (mtg.wins / mtg.total * 100) : 0;
-
     let pairStats = '';
     const sortedPairs = Object.entries(pairs).sort((a,b) => (b[1].wins+b[1].losses) - (a[1].wins+a[1].losses));
     for (const [symbol, data] of sortedPairs.slice(0,5)) {
@@ -97,7 +91,7 @@ class PerformanceTracker {
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
     return `
-📊 **QX AI PERFORMANCE v6.1**
+📊 **QX AI PERFORMANCE v7.0**
 
 ━━━━━━━━━━━━━━━━━━━
 📈 **TOTAL**: ${total}
@@ -124,10 +118,8 @@ ${pairStats || '  No data yet'}
     return {
       wins: daily.wins + daily.mtgWins,
       losses: daily.losses + daily.mtgLosses,
-      total: totalToday,
-      rate,
-      mtgWins: daily.mtgWins,
-      mtgLosses: daily.mtgLosses
+      total: totalToday, rate,
+      mtgWins: daily.mtgWins, mtgLosses: daily.mtgLosses
     };
   }
 }
@@ -223,12 +215,6 @@ function isSessionLocked() {
   return true;
 }
 
-function isGoodTradingTime() {
-  const { h } = getBDTime();
-  for (const slot of TRADING_SCHEDULE) if (h >= slot.start && h < slot.end) return true;
-  return false;
-}
-
 function getActiveSessions() {
   const { h } = getBDTime();
   const active = [];
@@ -236,12 +222,6 @@ function getActiveSessions() {
   if (h >= MARKET_SESSIONS.NEWYORK.OPEN || h < MARKET_SESSIONS.NEWYORK.CLOSE) active.push('NEWYORK');
   if (h >= MARKET_SESSIONS.TOKYO.OPEN && h < MARKET_SESSIONS.TOKYO.CLOSE) active.push('TOKYO');
   return active;
-}
-
-function getTradingSessionName() {
-  const { h } = getBDTime();
-  for (const slot of TRADING_SCHEDULE) if (h >= slot.start && h < slot.end) return slot.name;
-  return 'Off-Hours';
 }
 
 function shouldSkipPair(symbol) {
@@ -321,13 +301,12 @@ async function getCandles(symbol, count = 50, interval = '1min') {
   const diffMinutes = (new Date() - lastCandleTime) / (60 * 1000);
   if (diffMinutes > 5) throw new Error('Stale data');
   return data.values.map(v => ({
-    open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0,
-    datetime: v.datetime
+    open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0
   })).reverse();
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 HIGH ACCURACY INDICATORS (14 Indicators)
+// 📈 HIGH ACCURACY INDICATORS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
@@ -340,9 +319,22 @@ function calcRSI(candles, period = 14) {
   return 100 - (100 / (1 + gain / (loss || 1)));
 }
 
-function calcMACD(candles) {
-  return calcEMA(candles, 12) - calcEMA(candles, 26);
+function calcEMA(candles, period) {
+  if (candles.length < 2) return candles[0].close;
+  const k = 2 / (period + 1);
+  let ema = candles[0].close;
+  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
+  return ema;
 }
+
+function calcEMASeries(candles, period) {
+  const k = 2 / (period + 1);
+  const series = [candles[0].close];
+  for (let i = 1; i < candles.length; i++) series.push(candles[i].close * k + series[i-1] * (1 - k));
+  return series;
+}
+
+function calcMACD(candles) { return calcEMA(candles, 12) - calcEMA(candles, 26); }
 
 function calcADX(candles, period = 14) {
   if (candles.length < period + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
@@ -374,6 +366,14 @@ function calcBB(candles, period = 20) {
   return { upper: sma + 2*std, lower: sma - 2*std, mid: sma };
 }
 
+function calcATR(candles, period = 14) {
+  const trs = [];
+  for (let i = 1; i < candles.length; i++) {
+    trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
+  }
+  return trs.slice(-period).reduce((a,b) => a+b, 0) / period;
+}
+
 function calcSupertrend(candles, period = 10, multiplier = 3) {
   const atr = calcATR(candles, period);
   const last = candles[candles.length - 1];
@@ -398,7 +398,7 @@ function calcVWAP(candles) {
   }
   const vwap = cumVol > 0 ? cumPV / cumVol : recent[recent.length - 1].close;
   const last = recent[recent.length - 1].close;
-  return { vwap, dir: last > vwap ? 'UP' : 'DOWN', dist: Math.abs(last - vwap) / last * 100 };
+  return { vwap, dir: last > vwap ? 'UP' : 'DOWN' };
 }
 
 function calcSupportResistance(candles) {
@@ -425,30 +425,8 @@ function calcCandlePattern(candles) {
   if (bear && p.close > p.open && c.open > p.close && c.close < p.open) return { pattern: 'Bearish Engulfing', dir: 'DOWN', str: 4 };
   if (dnWick > body * 2.5 && upWick < body * 0.5) return { pattern: 'Bullish Pin Bar', dir: 'UP', str: 3 };
   if (upWick > body * 2.5 && dnWick < body * 0.5) return { pattern: 'Bearish Pin Bar', dir: 'DOWN', str: 3 };
-  if (p2.close < p2.open && Math.abs(p.close-p.open) < Math.abs(p2.close-p2.open)*0.3 && bull) return { pattern: 'Morning Star', dir: 'UP', str: 4 };
-  if (p2.close > p2.open && Math.abs(p.close-p.open) < Math.abs(p2.close-p2.open)*0.3 && bear) return { pattern: 'Evening Star', dir: 'DOWN', str: 4 };
-  if (bull && p.close > p.open && p2.close > p2.open && body > range * 0.6) return { pattern: 'Three White Soldiers', dir: 'UP', str: 5 };
-  if (bear && p.close < p.open && p2.close < p2.open && body > range * 0.6) return { pattern: 'Three Black Crows', dir: 'DOWN', str: 5 };
   if (body < range * 0.1) return { pattern: 'Doji', dir: 'NEUTRAL', str: 1 };
-  if (bull && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bullish Marubozu', dir: 'UP', str: 3 };
-  if (bear && upWick < body * 0.05 && dnWick < body * 0.05) return { pattern: 'Bearish Marubozu', dir: 'DOWN', str: 3 };
   return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
-}
-
-function calcATR(candles, period = 14) {
-  const trs = [];
-  for (let i = 1; i < candles.length; i++) {
-    trs.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
-  }
-  return trs.slice(-period).reduce((a,b) => a+b, 0) / period;
-}
-
-function calcEMA(candles, period) {
-  if (candles.length < 2) return candles[0].close;
-  const k = 2 / (period + 1);
-  let ema = candles[0].close;
-  for (let i = 1; i < candles.length; i++) ema = candles[i].close * k + ema * (1 - k);
-  return ema;
 }
 
 function calcTrend(candles) {
@@ -458,73 +436,45 @@ function calcTrend(candles) {
   if (ema20 > ema50) up += 2; else dn += 2;
   if (last > ema20) up += 1; else dn += 1;
   if (last > ema50) up += 1; else dn += 1;
-  return {
-    dir: up > dn ? 'UP' : 'DOWN',
-    up, dn,
-    isStrong: up >= 3 || dn >= 3,
-    label: up > dn ? 'Uptrend 📈' : 'Downtrend 📉'
-  };
+  return { dir: up > dn ? 'UP' : 'DOWN', up, dn, isStrong: up >= 3 || dn >= 3, label: up > dn ? 'Uptrend 📈' : 'Downtrend 📉' };
 }
 
 function calcIchimoku(candles) {
   const len = candles.length;
-  if (len < 52) return { senkouA: 0, senkouB: 0, tenkan: 0, kijun: 0, chikou: 0, trend: 'NEUTRAL' };
-
+  if (len < 52) return { trend: 'NEUTRAL', up: 0, dn: 0, label: 'Ichimoku N/A' };
   const high9 = Math.max(...candles.slice(-9).map(c => c.high));
   const low9 = Math.min(...candles.slice(-9).map(c => c.low));
   const tenkan = (high9 + low9) / 2;
-
   const high26 = Math.max(...candles.slice(-26).map(c => c.high));
   const low26 = Math.min(...candles.slice(-26).map(c => c.low));
   const kijun = (high26 + low26) / 2;
-
   const senkouA = (tenkan + kijun) / 2;
-
   const high52 = Math.max(...candles.slice(-52).map(c => c.high));
   const low52 = Math.min(...candles.slice(-52).map(c => c.low));
   const senkouB = (high52 + low52) / 2;
-
   const chikou = candles.length >= 26 ? candles[candles.length - 26].close : candles[0].close;
   const last = candles[candles.length - 1].close;
-
   let up = 0, dn = 0;
-
-  if (last > senkouA && last > senkouB) { up += 3; }
-  else if (last < senkouA && last < senkouB) { dn += 3; }
-
-  if (tenkan > kijun) up += 2;
-  else dn += 2;
-
-  if (chikou > last) up += 2;
-  else dn += 2;
-
-  return {
-    tenkan, kijun, senkouA, senkouB, chikou,
-    trend: up > dn ? 'UP' : 'DOWN',
-    up, dn,
-    isStrong: up >= 5 || dn >= 5,
-    label: up > dn ? 'Ichimoku Bullish ☀️' : 'Ichimoku Bearish 🌧️'
-  };
+  if (last > senkouA && last > senkouB) up += 3; else if (last < senkouA && last < senkouB) dn += 3;
+  if (tenkan > kijun) up += 2; else dn += 2;
+  if (chikou > last) up += 2; else dn += 2;
+  return { trend: up > dn ? 'UP' : 'DOWN', up, dn, label: up > dn ? 'Ichimoku Bullish ☀️' : 'Ichimoku Bearish 🌧️' };
 }
 
 function calcMFI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let positiveFlow = 0, negativeFlow = 0;
-
   for (let i = candles.length - period; i < candles.length; i++) {
     const typical = (candles[i].high + candles[i].low + candles[i].close) / 3;
     const vol = candles[i].volume || 1;
     const moneyFlow = typical * vol;
-
     if (i > 0) {
       const prevTypical = (candles[i-1].high + candles[i-1].low + candles[i-1].close) / 3;
       if (typical > prevTypical) positiveFlow += moneyFlow;
       else if (typical < prevTypical) negativeFlow += moneyFlow;
     }
   }
-
-  const mfi = 100 - (100 / (1 + (positiveFlow / (negativeFlow || 1))));
-  return mfi;
+  return 100 - (100 / (1 + (positiveFlow / (negativeFlow || 1))));
 }
 
 function calcFibonacci(candles) {
@@ -533,56 +483,27 @@ function calcFibonacci(candles) {
   const high = Math.max(...slice.map(c => c.high));
   const low = Math.min(...slice.map(c => c.low));
   const last = candles[candles.length - 1].close;
-
   const diff = high - low;
-  const levels = {
-    level0: high,
-    level236: high - diff * 0.236,
-    level382: high - diff * 0.382,
-    level500: high - diff * 0.5,
-    level618: high - diff * 0.618,
-    level786: high - diff * 0.786,
-    level100: low
-  };
-
-  let nearLevel = null;
-  let nearDist = Infinity;
-  for (const [key, value] of Object.entries(levels)) {
-    const dist = Math.abs(last - value) / last;
-    if (dist < 0.001 && dist < nearDist) {
-      nearDist = dist;
-      nearLevel = key;
-    }
-  }
-
-  const near618 = Math.abs(last - levels.level618) / last < 0.001;
-  const above618 = last > levels.level618;
-
-  return {
-    ...levels,
-    nearLevel,
-    near618,
-    above618,
-    dir: above618 ? 'UP' : 'DOWN'
-  };
+  const level618 = high - diff * 0.618;
+  const near618 = Math.abs(last - level618) / last < 0.001;
+  const above618 = last > level618;
+  return { near618, above618 };
 }
 
 function calcChaikinMF(candles, period = 21) {
   if (candles.length < period) return 0;
   let sumMF = 0;
-
   for (let i = candles.length - period; i < candles.length; i++) {
     const c = candles[i];
     const mf = ((c.close - c.low) - (c.high - c.close)) / (c.high - c.low) * (c.volume || 1);
     sumMF += mf;
   }
-
   const totalVol = candles.slice(-period).reduce((s, c) => s + (c.volume || 1), 0);
   return totalVol > 0 ? sumMF / totalVol : 0;
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 FULL ANALYSIS (14 High Accuracy Indicators)
+// 🔍 FULL ANALYSIS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function analyzeSymbol(symbol, relaxed = false) {
@@ -612,8 +533,7 @@ async function analyzeSymbol(symbol, relaxed = false) {
   else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
   else if (rsi < 45) up += 1; else if (rsi > 55) dn += 1;
 
-  if (macd > 0) { up += 3; signals.push('MACD Bullish'); }
-  else { dn += 3; signals.push('MACD Bearish'); }
+  if (macd > 0) { up += 3; signals.push('MACD Bullish'); } else { dn += 3; signals.push('MACD Bearish'); }
 
   if (adx.adx >= 25) {
     if (adx.plusDI > adx.minusDI) { up += 3; signals.push(`ADX Strong (${adx.adx.toFixed(0)}) ✅`); }
@@ -638,12 +558,8 @@ async function analyzeSymbol(symbol, relaxed = false) {
   const volatility = (atr / last) * 100;
 
   up += trend.up; dn += trend.dn;
-  if (trend.dir === 'UP') signals.push('EMA Bullish Alignment');
-  else signals.push('EMA Bearish Alignment');
 
   up += ichimoku.up; dn += ichimoku.dn;
-  if (ichimoku.trend === 'UP') signals.push(ichimoku.label);
-  else if (ichimoku.trend === 'DOWN') signals.push(ichimoku.label);
 
   if (mfi < 20) { up += 3; signals.push(`MFI Oversold (${mfi.toFixed(0)})`); }
   else if (mfi > 80) { dn += 3; signals.push(`MFI Overbought (${mfi.toFixed(0)})`); }
@@ -651,9 +567,6 @@ async function analyzeSymbol(symbol, relaxed = false) {
   if (fib.near618) {
     if (fib.above618) { up += 3; signals.push('Fib 61.8% Support ✅'); }
     else { dn += 3; signals.push('Fib 61.8% Resistance ⚠️'); }
-  }
-  if (fib.nearLevel && fib.nearLevel !== 'level618') {
-    signals.push(`Near Fib ${fib.nearLevel.replace('level', '')}%`);
   }
 
   if (cmf > 0.1) { up += 2; signals.push('CMF Bullish 🟢'); }
@@ -665,16 +578,8 @@ async function analyzeSymbol(symbol, relaxed = false) {
   const direction = up >= dn ? 'UP' : 'DOWN';
   const aiScore = Math.round(ratio * 100);
 
-  let confidence = '';
-  if (aiScore >= 90) confidence = 'Extreme High 🔥🔥';
-  else if (aiScore >= 85) confidence = 'Very High 🔥';
-  else if (aiScore >= 80) confidence = 'High ✅';
-  else if (aiScore >= 75) confidence = 'Medium ⚡';
-  else confidence = 'Low ⚠️';
-
   const directionsAgree = [
-    trend.dir,
-    ichimoku.trend,
+    trend.dir, ichimoku.trend,
     supertrend.dir === 'NEUTRAL' ? direction : supertrend.dir,
     vwap.dir,
     adx.adx >= 25 ? (adx.plusDI > adx.minusDI ? 'UP' : 'DOWN') : direction,
@@ -688,88 +593,93 @@ async function analyzeSymbol(symbol, relaxed = false) {
 
   return {
     symbol, direction, ratio, aiScore, trend: trend.dir,
-    signals: signals.slice(0, 8),
-    currentPrice: last, volatility, confidence,
-    isSureShot: aiScore >= 90 && directionsAgree >= 5,
-    isValid, sr, candles,
-    adx: adx.adx, directionsAgree,
-    ichimoku: ichimoku.trend,
-    mfi: mfi,
-    fib: fib.nearLevel,
-    cmf: cmf
+    signals: signals.slice(0, 8), currentPrice: last, volatility,
+    isValid, sr, candles, adx: adx.adx, directionsAgree
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CANDLE CHART GENERATOR
+// 📊 CANDLESTICK + EMA + SUPPORT/RESISTANCE CHART
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function generateCandleChart(symbol, candles, direction, entryPrice, exitPrice, isMTG = false) {
+async function generateCandleChart(symbol, candles, entryPrice, exitPrice, isMTG = false) {
   try {
-    const plotCandles = candles.slice(-20);
-    // ✅ ফিক্স: QuickChart এর financial/candlestick প্লাগইন {x,o,h,l,c} অবজেক্ট ফরম্যাট প্রত্যাশা করে
+    const plotCandles = candles.slice(-30);
     const ohlcData = plotCandles.map((c, i) => ({ x: i + 1, o: c.open, h: c.high, l: c.low, c: c.close }));
+
+    const ema7Series = calcEMASeries(plotCandles, 7);
+    const ema21Series = calcEMASeries(plotCandles, 21);
+    const sr = calcSupportResistance(candles);
+
+    const annotations = {
+      supportLine: {
+        type: 'line', yMin: sr.support, yMax: sr.support,
+        borderColor: 'rgba(0,255,136,0.5)', borderWidth: 1, borderDash: [4,4],
+        label: { content: 'SUPPORT', enabled: true, position: 'start', backgroundColor: 'rgba(0,255,136,0.6)', color: '#000', font: { size: 9 } }
+      },
+      resistanceLine: {
+        type: 'line', yMin: sr.resistance, yMax: sr.resistance,
+        borderColor: 'rgba(255,68,68,0.5)', borderWidth: 1, borderDash: [4,4],
+        label: { content: 'RESISTANCE', enabled: true, position: 'start', backgroundColor: 'rgba(255,68,68,0.6)', color: '#000', font: { size: 9 } }
+      }
+    };
+
+    if (entryPrice !== null && entryPrice !== undefined) {
+      annotations.entryLine = {
+        type: 'line', yMin: entryPrice, yMax: entryPrice,
+        borderColor: 'rgba(255,215,0,0.9)', borderWidth: 2, borderDash: [6, 4],
+        label: { content: isMTG ? 'MTG ENTRY' : 'ENTRY', enabled: true, position: 'start', backgroundColor: 'rgba(255,215,0,0.8)', color: '#000' }
+      };
+    }
+    if (exitPrice !== null && exitPrice !== undefined && entryPrice) {
+      annotations.exitLine = {
+        type: 'line', yMin: exitPrice, yMax: exitPrice,
+        borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444', borderWidth: 2, borderDash: [6, 4],
+        label: {
+          content: exitPrice > entryPrice ? (isMTG ? 'MTG WIN' : 'WIN') : (isMTG ? 'MTG LOSS' : 'LOSS'),
+          enabled: true, position: 'end',
+          backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)', color: '#fff'
+        }
+      };
+    }
 
     const chartConfig = {
       type: 'candlestick',
       data: {
-        datasets: [{
-          label: `${symbol}`,
-          data: ohlcData,
-          color: {
-            up: '#00ff88',
-            down: '#ff4444',
-            unchanged: '#999999'
+        datasets: [
+          {
+            label: symbol,
+            data: ohlcData,
+            color: { up: '#00ff88', down: '#ff4444', unchanged: '#999999' }
+          },
+          {
+            type: 'line',
+            label: 'EMA 7',
+            data: ema7Series.map((v, i) => ({ x: i + 1, y: v })),
+            borderColor: '#00d4ff',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false
+          },
+          {
+            type: 'line',
+            label: 'EMA 21',
+            data: ema21Series.map((v, i) => ({ x: i + 1, y: v })),
+            borderColor: '#ffaa00',
+            borderWidth: 1.5,
+            pointRadius: 0,
+            fill: false
           }
-        }]
+        ]
       },
       options: {
         plugins: {
-          legend: { labels: { color: '#ffffff' } },
-          annotation: {
-            annotations: {
-              entryLine: {
-                type: 'line',
-                yMin: entryPrice,
-                yMax: entryPrice,
-                borderColor: 'rgba(255,215,0,0.9)',
-                borderWidth: 2,
-                borderDash: [6, 4],
-                label: {
-                  content: isMTG ? 'MTG ENTRY' : 'ENTRY',
-                  enabled: true,
-                  position: 'start',
-                  backgroundColor: 'rgba(255,215,0,0.8)',
-                  color: '#000'
-                }
-              },
-              exitLine: {
-                type: 'line',
-                yMin: exitPrice,
-                yMax: exitPrice,
-                borderColor: exitPrice > entryPrice ? '#00ff88' : '#ff4444',
-                borderWidth: 2,
-                borderDash: [6, 4],
-                label: {
-                  content: exitPrice > entryPrice ? (isMTG ? 'MTG WIN' : 'WIN') : (isMTG ? 'MTG LOSS' : 'LOSS'),
-                  enabled: true,
-                  position: 'end',
-                  backgroundColor: exitPrice > entryPrice ? 'rgba(0,255,136,0.9)' : 'rgba(255,68,68,0.9)',
-                  color: '#fff'
-                }
-              }
-            }
-          }
+          legend: { labels: { color: '#ffffff', font: { size: 10 } } },
+          annotation: { annotations }
         },
         scales: {
-          x: {
-            ticks: { color: '#aaa' },
-            grid: { color: 'rgba(255,255,255,0.05)' }
-          },
-          y: {
-            ticks: { color: '#aaa' },
-            grid: { color: 'rgba(255,255,255,0.05)' }
-          }
+          x: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } },
+          y: { ticks: { color: '#aaa' }, grid: { color: 'rgba(255,255,255,0.05)' } }
         }
       }
     };
@@ -780,17 +690,16 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
       body: JSON.stringify({
         chart: chartConfig,
         width: 800,
-        height: 450,
+        height: 480,
         backgroundColor: '#1a1a2e',
         version: '3'
       })
     });
 
     if (!response.ok) throw new Error(`QuickChart error: ${response.status}`);
-    const imageBuffer = await response.buffer();
-    return imageBuffer;
+    return await response.buffer();
   } catch (error) {
-    console.error('❌ Candle chart generation failed:', error.message);
+    console.error('❌ Chart generation failed:', error.message);
     return null;
   }
 }
@@ -800,10 +709,6 @@ async function generateCandleChart(symbol, candles, direction, entryPrice, exitP
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function findBestPair(ignoreTime = false, relaxed = false) {
-  if (!ignoreTime && !isGoodTradingTime()) {
-    console.log(`⏰ ${getTradingSessionName()} - Not good trading time`);
-    return null;
-  }
   if (!ignoreTime && checkLossStreak()) {
     console.log('⏸️ Loss streak detected, pausing...');
     return null;
@@ -822,7 +727,7 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
       const result = await analyzeSymbol(pair.symbol, relaxed);
       result.flag = pair.flag;
       result.priority = pair.priority;
-      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/7 | Vol=${(result.volatility*100).toFixed(2)}%`);
+      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/7`);
 
       if (!result.isValid) { await sleep(800); continue; }
 
@@ -851,10 +756,7 @@ function waitForExactSecond(targetSecond) {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s === targetSecond) {
-        clearInterval(check);
-        resolve();
-      }
+      if (s === targetSecond) { clearInterval(check); resolve(); }
     }, 100);
     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
@@ -865,10 +767,7 @@ function waitForCandleClose() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 58) {
-        clearInterval(check);
-        resolve();
-      }
+      if (s >= 58) { clearInterval(check); resolve(); }
     }, 500);
     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
@@ -879,20 +778,17 @@ function waitForNewCandle() {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s === 0 || s === 1) {
-        clearInterval(check);
-        resolve();
-      }
+      if (s === 0 || s === 1) { clearInterval(check); resolve(); }
     }, 500);
     setTimeout(() => { clearInterval(check); resolve(); }, 30000);
   });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER
+// 🎯 PRO SIGNAL SENDER (নতুন মেসেজ ফরম্যাট)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = null, exitPriceOverride = null) {
+async function sendProSignal(bot, signal, isMTG = false) {
   const signalKey = generateSignalKey(signal.symbol, signal.direction);
   if (sentSignals.has(signalKey) && !isMTG) {
     console.log(`⚠️ Duplicate signal: ${signalKey}`);
@@ -905,7 +801,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
   const dirLabel = signal.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴';
 
   try {
-    // ━━━ Signal Message ━━━
+    // ━━━ Signal Message (asset name + score) ━━━
     await safeSendMessage(bot,
       `╔════════════════════╗\n` +
       `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
@@ -923,58 +819,46 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ Wait for 45 second ━━━
     console.log(`⏳ Waiting for signal timing (45s)...`);
     await waitForExactSecond(45);
 
-    const bdTime = getBDTime();
-    console.log(`📡 Signal timing! Entry at: ${bdTime.fullTime}`);
-
-    // ━━━ Direction Sticker ━━━
     const dirSticker = isMTG ? (signal.direction === 'UP' ? STICKERS.MTG_UP : STICKERS.MTG_DOWN) : (signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT);
     await safeSendSticker(bot, dirSticker);
     console.log(`✅ ${signal.symbol} ${dirLabel}${isMTG ? ' (MTG)' : ''}`);
 
-    // ━━━ Entry Price (59 second — এই candle এর close) ━━━
+    // ━━━ Entry Price (candle close ~59s) ━━━
     await waitForExactSecond(59);
-    let entryPrice = entryPriceOverride || signal.currentPrice;
+    let entryPrice = signal.currentPrice;
     try {
-      const priceData = await getCurrentPrice(signal.symbol);
-      if (priceData) entryPrice = priceData;
+      const p = await getCurrentPrice(signal.symbol);
+      if (p) entryPrice = p;
     } catch(e) {}
     console.log(`💰 Entry Price: ${entryPrice}`);
 
-    // ━━━ Live Price Update ━━━
+    // ━━━ Live Price Update (নতুন ফরম্যাট) ━━━
     await safeSendMessage(bot,
-      `💹 **LIVE PRICE UPDATE**\n\n` +
-      `📊 ${signal.symbol}\n` +
-      `💰 Entry: ${entryPrice.toFixed(5)}\n` +
-      `📈 High: ${(entryPrice * 1.002).toFixed(5)}\n` +
-      `📉 Low: ${(entryPrice * 0.998).toFixed(5)}\n` +
-      `⚡ Volatility: ${(signal.volatility * 100).toFixed(2)}%\n\n` +
-      `⏰ Entry Time: ${getBDTime().fullTime}`,
+      `💹 **𝗟𝗜𝗩𝗘 𝗣𝗥𝗜𝗖𝗘 𝗨𝗣𝗗𝗔𝗧𝗘**\n\n` +
+      `📊 **Asset:** ${signal.symbol} ${flag}\n` +
+      `💰 **Entry Price:** ${entryPrice.toFixed(5)}\n` +
+      `⏰ **Entry Time:** ${getBDTime().fullTime} (BD)\n\n` +
+      `━━━━━━━━━━━━━━━━\n\n` +
+      `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
       { parse_mode: 'Markdown' }
     );
 
-    // ━━━ ✅ ফিক্স করা অংশ — পরের (নতুন) candle এর close পর্যন্ত পূর্ণ অপেক্ষা ━━━
-    // এইমাত্র বর্তমান মিনিটের ৫৯ সেকেন্ডে আছি। waitForCandleClose() তখনই আবার true
-    // হয়ে যেত (কারণ এটা শুধু s>=58 চেক করে, নতুন মিনিট শুরু হয়েছে কিনা নয়)।
-    // তাই আগে প্রায় পুরো এক মিনিট (৫৫ সেকেন্ড) এগিয়ে দিয়ে তারপর কনফার্ম করা হচ্ছে,
-    // যাতে exit price সত্যিকারের "পরের candle" এর close price হয়।
+    // ━━━ পরের candle এর close পর্যন্ত অপেক্ষা (fixed timing) ━━━
     console.log(`⏳ Waiting for NEXT candle close (~60s)...`);
     await sleep(55000);
     await waitForCandleClose();
     await sleep(1500);
 
-    // ━━━ Exit Price ━━━
-    let exitPrice = exitPriceOverride || entryPrice;
+    let exitPrice = entryPrice;
     try {
-      const priceData = await getCurrentPrice(signal.symbol);
-      if (priceData) exitPrice = priceData;
+      const p = await getCurrentPrice(signal.symbol);
+      if (p) exitPrice = p;
     } catch(e) {}
     console.log(`💰 Exit Price: ${exitPrice}`);
 
-    // ━━━ Result ━━━
     const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
     console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
 
@@ -984,52 +868,31 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
     }
     tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
-    // ━━━ Candle Chart ━━━
-    const chartBuffer = await generateCandleChart(signal.symbol, signal.candles, signal.direction, entryPrice, exitPrice, isMTG);
+    // ━━━ চার্ট (candlestick + EMA + S/R + entry/exit) ━━━
+    const chartBuffer = await generateCandleChart(signal.symbol, signal.candles, entryPrice, exitPrice, isMTG);
     if (chartBuffer) {
-      const chartCaption = isMTG ? `📊 MTG ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}` : `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}`;
-      await safeSendPhoto(bot, chartBuffer, chartCaption);
+      await safeSendPhoto(bot, chartBuffer, `📊 ${signal.symbol} | ${isWin ? '✅ WIN' : '❌ LOSS'}${isMTG ? ' (MTG)' : ''}`);
     }
 
-    // ━━━ Result Message ━━━
-    const todayStats = tracker.getTodayStats();
-
+    // ━━━ Result Message (নতুন সংক্ষিপ্ত ফরম্যাট) ━━━
     if (isWin) {
-      if (!isMTG) {
-        await safeSendSticker(bot, STICKERS.SURESHOT);
-        await sleep(600);
-      }
+      if (!isMTG) { await safeSendSticker(bot, STICKERS.SURESHOT); await sleep(600); }
       await safeSendMessage(bot,
-        `✅ **SIGNAL RESULT : WIN${isMTG ? ' (MTG)' : ''}**\n\n` +
-        `━━━━━━━━━━━━━━━━━━━\n` +
-        `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
-        `🎯 **Direction**: ${dirLabel}\n` +
-        `📈 **Result**   : WIN ✅\n` +
-        `💰 **Profit**   : +${((exitPrice - entryPrice) / entryPrice * 100).toFixed(2)}%\n` +
-        `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `${isMTG ? '🔄 **MTG Recovery Successful!** ✅\n\n' : '🎯 **SURESHOT** ✅\n\n'}` +
-        `📊 **Today Stats**: ${todayStats.wins}W / ${todayStats.losses}L (MTG: ${todayStats.mtgWins}W / ${todayStats.mtgLosses}L)\n\n` +
-        `💎 **OWNER**: @AkiL_xD 👾`,
+        `✅ **𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
+        `📊 ${signal.symbol} ${flag}\n` +
+        `🏆 Result: ✅ WIN 🎉\n\n` +
+        `🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬`,
         { parse_mode: 'Markdown' }
       );
     } else {
       await safeSendMessage(bot,
-        `❌ **SIGNAL RESULT : LOSS${isMTG ? ' (MTG)' : ''}**\n\n` +
-        `━━━━━━━━━━━━━━━━━━━\n` +
-        `📊 **Asset**    : ${signal.symbol} ${flag}\n` +
-        `🎯 **Direction**: ${dirLabel}\n` +
-        `📈 **Result**   : LOSS ❌\n` +
-        `📉 **Loss**     : ${((entryPrice - exitPrice) / entryPrice * 100).toFixed(2)}%\n` +
-        `━━━━━━━━━━━━━━━━━━━\n\n` +
-        `${isMTG ? '🔄 **MTG Recovery Failed!** ❌\n' : '💪 **MTG Recovery Mode Activated!**\n'}` +
-        `📊 **Today Stats**: ${todayStats.wins}W / ${todayStats.losses}L (MTG: ${todayStats.mtgWins}W / ${todayStats.mtgLosses}L)\n\n` +
-        `💎 **OWNER**: @AkiL_xD 👾`,
+        `❌ **𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
+        `📊 ${signal.symbol} ${flag}\n` +
+        `📉 Result: LOSS\n\n` +
+        `${isMTG ? '🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬' : '🔄 Recovery Signal Coming Soon...'}`,
         { parse_mode: 'Markdown' }
       );
-
-      if (!isMTG) {
-        await handleMTGRecovery(bot, signal);
-      }
+      if (!isMTG) await handleMTGRecovery(bot, signal);
     }
 
     return { isWin, entryPrice, exitPrice };
@@ -1045,11 +908,7 @@ async function sendProSignal(bot, signal, isMTG = false, entryPriceOverride = nu
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function handleMTGRecovery(bot, originalSignal) {
-  if (isRecoveryMode) {
-    console.log('⚠️ Recovery already in progress');
-    return;
-  }
-
+  if (isRecoveryMode) { console.log('⚠️ Recovery already in progress'); return; }
   isRecoveryMode = true;
   recoveryAttempts = 0;
 
@@ -1062,13 +921,11 @@ async function handleMTGRecovery(bot, originalSignal) {
       `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
       `⏳ **Coming in 3–5 Minutes**\n` +
       `✅ **Wait for Confirmation**\n\n` +
-      `⚠️ **দয়া করে অফিসিয়াল সিগন্যাল না পাওয়া পর্যন্ত কোনো এন্ট্রি নেবেন না।**\n\n` +
-      `📈 **সবাই প্রস্তুত থাকুন!**`,
+      `⚠️ **দয়া করে অফিসিয়াল সিগন্যাল না পাওয়া পর্যন্ত কোনো এন্ট্রি নেবেন না।**`,
       { parse_mode: 'Markdown' }
     );
 
     await sleep(3000);
-
     const startTime = Date.now();
     const maxWaitTime = 5 * 60 * 1000;
     let foundSignal = false;
@@ -1076,65 +933,35 @@ async function handleMTGRecovery(bot, originalSignal) {
     while (Date.now() - startTime < maxWaitTime && recoveryAttempts < MAX_RECOVERY_ATTEMPTS && !foundSignal) {
       await waitForNewCandle();
       await sleep(2000);
-
       recoveryAttempts++;
-      console.log(`🔍 MTG Analysis Attempt ${recoveryAttempts}/${MAX_RECOVERY_ATTEMPTS}`);
 
       try {
         const analysis = await analyzeSymbol(originalSignal.symbol, true);
-
         const isSameDirection = analysis.direction === originalSignal.direction;
         const hasGoodConfidence = analysis.aiScore >= 82 && analysis.isValid && analysis.directionsAgree >= 4;
 
-        console.log(`📊 MTG Analysis: ${analysis.symbol} | Dir: ${analysis.direction} | Score: ${analysis.aiScore}% | Valid: ${analysis.isValid} | Agree: ${analysis.directionsAgree}/7`);
+        console.log(`📊 MTG Analysis: ${analysis.symbol} | Dir: ${analysis.direction} | Score: ${analysis.aiScore}% | Valid: ${analysis.isValid}`);
 
         if (isSameDirection && hasGoodConfidence) {
-          console.log(`✅ Found good MTG signal at candle ${recoveryAttempts}`);
           foundSignal = true;
-
-          await safeSendMessage(bot,
-            `🔄 **𝗠𝗧𝗚 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟**\n\n` +
-            `📊 **Asset:** ${analysis.symbol} ${flag}\n` +
-            `🎯 **Direction:** ${analysis.direction === 'UP' ? 'CALL 🟢' : 'PUT 🔴'}\n` +
-            `📈 **Confidence:** ${analysis.aiScore}%\n` +
-            `⏰ **Entry Time:** ${getBDTime().fullTime}\n\n` +
-            `✅ **MTG Signal Confirmed! Entry Now!**`,
-            { parse_mode: 'Markdown' }
-          );
-
-          const mtgResult = await sendProSignal(bot, analysis, true);
-
-          if (mtgResult && mtgResult.isWin) {
-            console.log('✅ MTG Recovery Successful!');
-          } else {
-            console.log('❌ MTG Recovery Failed');
-          }
-
+          await sendProSignal(bot, analysis, true);
           break;
-        } else {
-          console.log(`⏳ MTG signal not ready yet (attempt ${recoveryAttempts})`);
         }
-
       } catch (error) {
         console.error(`❌ MTG analysis error: ${error.message}`);
       }
 
-      if (!foundSignal) {
-        await sleep(30 * 1000);
-      }
+      if (!foundSignal) await sleep(30 * 1000);
     }
 
     if (!foundSignal) {
-      console.log('⏭️ MTG Recovery: No good signal found within time limit');
       await safeSendMessage(bot,
         `⏭️ **𝗠𝗧𝗚 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗞𝗜𝗣𝗣𝗘𝗗**\n\n` +
         `📊 **Asset:** ${originalSignal.symbol} ${flag}\n` +
-        `⏳ **No good recovery signal found in 5 minutes**\n\n` +
-        `🛡️ **Wait for next session for fresh signals.**`,
+        `⏳ **No good recovery signal found in 5 minutes**`,
         { parse_mode: 'Markdown' }
       );
     }
-
   } catch (error) {
     console.error(`❌ MTG Recovery error: ${error.message}`);
   } finally {
@@ -1144,7 +971,7 @@ async function handleMTGRecovery(bot, originalSignal) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🏁 MAIN SESSION RUNNER
+// 🏁 MAIN SESSION RUNNER (dynamic close: ৩ win এ close, নাহলে max ৫)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function runSession(bot, sessionName, isManual = false) {
@@ -1164,43 +991,39 @@ async function runSession(bot, sessionName, isManual = false) {
   }
 
   try {
-    const { display, hStr, mStr } = getBDTime();
-    console.log(`🏁 ${sessionName} Session Started — BD: ${hStr}:${mStr}`);
+    console.log(`🏁 ${sessionName} Session Started`);
     completedSessions.set(sessionKey, Date.now());
 
     await safeSendSticker(bot, STICKERS.SESSION_START);
     await sleep(1500);
-
-    await safeSendMessage(bot,
-      `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬**\n\n` +
-      `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
-      `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
-      `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
-      `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই অনুসরণ করুন।**`,
-      { parse_mode: 'Markdown' }
-    );
+    await safeSendMessage(bot, SESSION_INTRO_MESSAGE, { parse_mode: 'Markdown' });
 
     await sleep(2 * 60 * 1000);
     await safeSendSticker(bot, STICKERS.ARE_YOU_READY);
     await sleep(3000);
 
-    const SESSION_DURATION = 30 * 60 * 1000;
-    const sessionStart = Date.now();
-    let signalCount = 0;
     const MAX_SIGNALS = 5;
+    const WIN_STREAK_TO_CLOSE = 3;
+    let signalCount = 0;
+    let winCount = 0;
+    let lossCount = 0;
+    let currentWinStreak = 0;
     let isFirstSignal = true;
     let lastSignalTime = Date.now();
     const MIN_SIGNAL_GAP = 5 * 60 * 1000;
     const MAX_SIGNAL_GAP = 15 * 60 * 1000;
+    const SESSION_MAX_DURATION = 90 * 60 * 1000; // নিরাপত্তার জন্য উচ্চ সীমা
 
-    while (Date.now() - sessionStart < SESSION_DURATION && signalCount < MAX_SIGNALS) {
-      if (!sessionRunning) {
-        console.log(`⚠️ Session lock lost, stopping`);
+    const sessionStart = Date.now();
+
+    while (signalCount < MAX_SIGNALS && Date.now() - sessionStart < SESSION_MAX_DURATION) {
+      if (!sessionRunning) { console.log(`⚠️ Session lock lost, stopping`); break; }
+
+      // ✅ টানা ৩টা WIN হলে সেশন close করে দেওয়া
+      if (currentWinStreak >= WIN_STREAK_TO_CLOSE) {
+        console.log(`🏆 ${WIN_STREAK_TO_CLOSE} consecutive wins — closing session early`);
         break;
       }
-
-      const timeLeft = Math.round((SESSION_DURATION - (Date.now() - sessionStart)) / 60000);
-      console.log(`🔍 Scanning... Signal: ${signalCount}/${MAX_SIGNALS} | Time left: ${timeLeft}min`);
 
       const gapSinceLast = Date.now() - lastSignalTime;
       const forceRelaxed = gapSinceLast >= MAX_SIGNAL_GAP;
@@ -1208,7 +1031,6 @@ async function runSession(bot, sessionName, isManual = false) {
       let best = null;
       try {
         best = await findBestPair(isManual, forceRelaxed);
-        if (forceRelaxed && best) console.log(`⚡ 15min limit reached — sending relaxed signal: ${best.symbol}`);
       } catch (e) {
         console.error(`❌ Error: ${e.message}`);
         await sleep(60000);
@@ -1222,15 +1044,10 @@ async function runSession(bot, sessionName, isManual = false) {
       }
 
       if (!isFirstSignal && gapSinceLast < MIN_SIGNAL_GAP) {
-        const waitMore = MIN_SIGNAL_GAP - gapSinceLast;
-        console.log(`⏱️ Min gap not met, waiting ${Math.round(waitMore/1000)}s more...`);
-        await sleep(waitMore);
+        await sleep(MIN_SIGNAL_GAP - gapSinceLast);
       }
 
-      if (!isFirstSignal) {
-        await safeSendSticker(bot, STICKERS.NEXT_ONE);
-        await sleep(2000);
-      }
+      if (!isFirstSignal) { await safeSendSticker(bot, STICKERS.NEXT_ONE); await sleep(2000); }
       isFirstSignal = false;
 
       try {
@@ -1238,13 +1055,14 @@ async function runSession(bot, sessionName, isManual = false) {
         if (result !== null && result.isWin !== undefined) {
           signalCount++;
           lastSignalTime = Date.now();
+          if (result.isWin) { winCount++; currentWinStreak++; }
+          else { lossCount++; currentWinStreak = 0; }
         }
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
       }
 
-      if (signalCount < MAX_SIGNALS && Date.now() - sessionStart < SESSION_DURATION) {
-        console.log(`😴 Waiting before next scan...`);
+      if (signalCount < MAX_SIGNALS && currentWinStreak < WIN_STREAK_TO_CLOSE) {
         await sleep(60 * 1000);
       }
     }
@@ -1253,22 +1071,32 @@ async function runSession(bot, sessionName, isManual = false) {
     await safeSendSticker(bot, STICKERS.SESSION_CLOSE);
     await sleep(800);
 
-    const { display: endDisplay } = getBDTime();
-    const statsMsg = tracker.getStatsMessage();
+    // ━━━ Session Result Message (win/loss অনুযায়ী ভিন্ন) ━━━
+    if (winCount > lossCount) {
+      await safeSendMessage(bot,
+        `🏆 **𝗦𝗘𝗦𝗦𝗜𝗢𝗡 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
+        `📊 **Total Signals:** ${signalCount}\n` +
+        `🟢 **WIN:** ${winCount}\n` +
+        `🔴 **LOSS:** ${lossCount}\n\n` +
+        `💬 **Feedback:** @AkiL_xD\n` +
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
+        { parse_mode: 'Markdown' }
+      );
+    } else {
+      await safeSendMessage(bot,
+        `📊 **𝗦𝗘𝗦𝗦𝗜𝗢𝗡 𝗥𝗘𝗦𝗨𝗟𝗧**\n\n` +
+        `📈 **Total Signals:** ${signalCount}\n` +
+        `🟢 **WIN:** ${winCount}\n` +
+        `🔴 **LOSS:** ${lossCount}\n\n` +
+        `🙏 **Thank You for Staying With Us.**\n` +
+        `📅 **We'll Be Back With Better Setups.**\n\n` +
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
+        { parse_mode: 'Markdown' }
+      );
+    }
 
-    await safeSendMessage(bot,
-      `🏁 **${sessionName} Session Ended!**\n\n` +
-      `⏰ Time: ${endDisplay} (BD Time)\n` +
-      `📊 **Total Signals:** ${signalCount}\n\n` +
-      `${statsMsg}\n\n` +
-      `🙏 Thanks everyone!\n` +
-      `💪 See you next session.\n\n` +
-      `⚠️ Always trade at your own risk.`,
-      { parse_mode: 'Markdown' }
-    );
-
-    console.log(`✅ ${sessionName} Ended | Total: ${signalCount}`);
-    return { started: true, signalCount };
+    console.log(`✅ ${sessionName} Ended | Total: ${signalCount} | W:${winCount} L:${lossCount}`);
+    return { started: true, signalCount, winCount, lossCount };
 
   } catch (err) {
     console.error(`💥 Session error: ${err.message}`);
@@ -1280,16 +1108,13 @@ async function runSession(bot, sessionName, isManual = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ AUTO SCHEDULER
+// ⏰ AUTO SCHEDULER — দিনে ২ বার: দুপুর ২টা ও রাত ৯টা (BD Time)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 module.exports = function (bot) {
-  if (schedulerInitialized) {
-    console.log('⚠️ Scheduler already initialized');
-    return;
-  }
+  if (schedulerInitialized) { console.log('⚠️ Scheduler already initialized'); return; }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v6.1 + 14 High Accuracy Indicators + Fixed Timing)');
+  console.log('✅ Scheduler started (v7.0 — 2x daily sessions: 2PM & 9PM BD)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
@@ -1297,68 +1122,39 @@ module.exports = function (bot) {
     try {
       const { h, m, s, dateKey } = getBDTime();
 
-      if (h === 11 && m === 30 && s < 10) {
-        const key = generateReminderKey('morning_reminder');
+      // দুপুর ২টা রিমাইন্ডার (১:৩০) ও সেশন (২:০০)
+      if (h === 13 && m === 30 && s < 10) {
+        const key = generateReminderKey('afternoon_reminder');
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `⏰ **Morning Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 ১২:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `⏰ **Afternoon Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕑 ২:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
-      if (h === 12 && m === 0 && s < 10) {
-        const key = generateSessionKey('🌅 Morning');
+      if (h === 14 && m === 0 && s < 10) {
+        const key = generateSessionKey('🌤️ Afternoon');
         if (!completedSessions.has(key) && !isSessionLocked()) {
-          runSession(bot, '🌅 Morning', false).catch(e => console.error(e.message));
+          runSession(bot, '🌤️ Afternoon', false).catch(e => console.error(e.message));
         }
       }
-      if (h === 15 && m === 30 && s < 10) {
-        const key = generateReminderKey('london_reminder');
-        if (!sentReminders.has(key)) {
-          sentReminders.set(key, Date.now());
-          await safeSendMessage(bot,
-            `⏰ **London Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 ৪:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
-            { parse_mode: 'Markdown' }
-          );
-        }
-      }
-      if (h === 16 && m === 0 && s < 10) {
-        const key = generateSessionKey('🇬🇧 London');
-        if (!completedSessions.has(key) && !isSessionLocked()) {
-          runSession(bot, '🇬🇧 London', false).catch(e => console.error(e.message));
-        }
-      }
+
+      // রাত ৯টা রিমাইন্ডার (৮:৩০) ও সেশন (৯:০০)
       if (h === 20 && m === 30 && s < 10) {
-        const key = generateReminderKey('evening_reminder');
+        const key = generateReminderKey('night_reminder');
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `🌙 **Evening Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 রাত ৯:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `🌙 **Night Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕘 রাত ৯:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
       }
       if (h === 21 && m === 0 && s < 10) {
-        const key = generateSessionKey('🌙 Evening');
+        const key = generateSessionKey('🌙 Night');
         if (!completedSessions.has(key) && !isSessionLocked()) {
-          runSession(bot, '🌙 Evening', false).catch(e => console.error(e.message));
-        }
-      }
-      if (h === 22 && m === 30 && s < 10) {
-        const key = generateReminderKey('ny_reminder');
-        if (!sentReminders.has(key)) {
-          sentReminders.set(key, Date.now());
-          await safeSendMessage(bot,
-            `🗽 **NY Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕙 রাত ১১:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
-            { parse_mode: 'Markdown' }
-          );
-        }
-      }
-      if (h === 23 && m === 0 && s < 10) {
-        const key = generateSessionKey('🗽 NY');
-        if (!completedSessions.has(key) && !isSessionLocked()) {
-          runSession(bot, '🗽 NY', false).catch(e => console.error(e.message));
+          runSession(bot, '🌙 Night', false).catch(e => console.error(e.message));
         }
       }
 
