@@ -1,4 +1,4 @@
-// v20 - Free Trial System + Affiliate Postback Auto-Verify
+// v21 - Free Trial + Affiliate Postback + Market-Aware Pairs + Result Tracking + Daily Admin Report
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
@@ -62,22 +62,161 @@ const broadcastMode = new Set();
 const banMode = new Set();
 const unbanMode = new Set();
 const unapproveMode = new Set();
-const messageUserMode = new Set();       // admin এখন target user id দিচ্ছে
-const pendingMessageTarget = new Map();  // adminId -> targetUserId (এখন message text এর অপেক্ষায়)
+const messageUserMode = new Set();
+const pendingMessageTarget = new Map();
 
-// session.js module reference — admin panel থেকে manual session চালানোর জন্য
 let sessionModule;
-
-// প্রতিটা user এর last signal message id store করার জন্য
 const lastSignalMsgId = new Map();
 
-// ✅ প্রতিটা user এর জন্য সবসময় একটা ক্লিকযোগ্য mention বানানোর হেল্পার —
-// username না থাকলেও tg://user?id= লিংক দিয়ে এক ক্লিকে প্রোফাইলে যাওয়া যায়
 function mentionUser(userId, username, firstName) {
   const safeName = (firstName || 'User').replace(/[\[\]]/g, '');
   if (username) return '@' + username + ' ([' + safeName + '](tg://user?id=' + userId + '))';
   return '[' + safeName + '](tg://user?id=' + userId + ')';
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ✅ নতুন — Daily result-tracking state (per-user + global)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+let dailyStats = { dateKey: null, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
+const userDailyStats = new Map(); // userId -> { directWin, mtgWin, loss }
+let lastReportDateKey = null;
+let resultRestActive = false; // মধ্যরাত ১০-১৫ মিনিট রেস্ট চলছে কিনা
+
+function currentBDDateKey() {
+  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+  return `${bd.getUTCFullYear()}-${String(bd.getUTCMonth() + 1).padStart(2, '0')}-${String(bd.getUTCDate()).padStart(2, '0')}`;
+}
+
+function formatReportDate(dateKeyStr) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const [y, mo, d] = dateKeyStr.split('-').map(Number);
+  return `${d} ${months[mo - 1]} ${y}`;
+}
+
+function getBDTimeInfo() {
+  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+  return {
+    hour: bd.getUTCHours(),
+    minute: bd.getUTCMinutes(),
+    second: bd.getUTCSeconds(),
+    day: bd.getUTCDay() // 0=রবি, 1=সোম, 5=শুক্র, 6=শনি
+  };
+}
+
+// Real (Live) market খোলা কিনা — সোম ১১AM থেকে শুক্র ১১PM (BD Time), প্রতিদিন ১১AM-১১PM
+function isRealMarketOpen() {
+  const { hour, day } = getBDTimeInfo();
+  if (day === 6) return false; // শনিবার সম্পূর্ণ বন্ধ
+  if (day === 0) return false; // রবিবার সম্পূর্ণ বন্ধ
+  if (day === 1 && hour < 11) return false; // সোমবার সকাল ১১টার আগে বন্ধ
+  if (day === 5 && hour >= 23) return false; // শুক্রবার রাত ১১টার পর বন্ধ
+  if (hour < 11 || hour >= 23) return false; // প্রতিদিন ১১PM-১১AM বন্ধ
+  return true;
+}
+
+function ensureDailyStatsFresh() {
+  const key = currentBDDateKey();
+  if (dailyStats.dateKey !== key) {
+    dailyStats = { dateKey: key, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
+    userDailyStats.clear();
+  }
+}
+
+function getUserStats(userId) {
+  if (!userDailyStats.has(userId)) userDailyStats.set(userId, { directWin: 0, mtgWin: 0, loss: 0 });
+  return userDailyStats.get(userId);
+}
+
+function buildDailyAdminReport() {
+  const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentBDDateKey());
+  const sortedUsers = [...userDailyStats.entries()]
+    .map(([uid, stats]) => ({ uid, ...stats, total: stats.directWin + stats.mtgWin + stats.loss }))
+    .sort((a, b) => b.total - a.total);
+
+  const top5 = sortedUsers.slice(0, 5);
+  const remaining = sortedUsers.length - top5.length;
+
+  let topText = '';
+  top5.forEach(u => {
+    const sub = submissions.find(s => s.userId === u.uid);
+    const uname = sub && sub.username ? '@' + sub.username : (sub ? sub.name : 'User ' + u.uid);
+    topText += `👤 ${uname} ➜ ${u.directWin}W • ${u.loss}L • ${u.mtgWin}M\n`;
+  });
+  if (!topText) topText = 'আজ কোনো সিগন্যাল নেওয়া হয়নি।\n';
+
+  return (
+    `📊 *𝗗𝗔𝗜𝗟𝗬 𝗔𝗗𝗠𝗜𝗡 𝗥𝗘𝗣𝗢𝗥𝗧*\n\n` +
+    `📅 ${dateStr}\n` +
+    `👥 *Active:* ${dailyStats.activeUsers.size}\n` +
+    `📊 *Signals:* ${dailyStats.totalSignals}\n\n` +
+    `🟢 *Direct Win:* ${dailyStats.directWin}\n` +
+    `🟡 *MTG Win:* ${dailyStats.mtgWin}\n` +
+    `🔴 *Loss:* ${dailyStats.loss}\n\n` +
+    `━━━━━━━━━━━━━━━━\n\n` +
+    `🏆 *Top Active Users*\n\n` +
+    topText +
+    (remaining > 0 ? `\n➕ +${remaining} More Users` : '')
+  );
+}
+
+// ✅ নতুন — একটা সিগন্যালের result ব্যাকগ্রাউন্ডে যাচাই করা (Direct candle → লস হলে ১ ধাপ MTG)
+// শুধু Real Market সময়ে (weekday, 11AM-11PM BD) কাজ করবে
+async function trackSignalResult(userId, symbol, direction) {
+  if (!isRealMarketOpen()) return; // Real market বন্ধ থাকলে ট্র্যাক করা হবে না
+
+  ensureDailyStatsFresh();
+  dailyStats.activeUsers.add(userId);
+  dailyStats.totalSignals++;
+
+  try {
+    // ━━━ STEP 1 — Direct candle: এই মিনিটের শুরুতে open price ━━━
+    const openCandles1 = await getCandles(symbol);
+    const openPrice1 = openCandles1[openCandles1.length - 1].close; // বর্তমান মুহূর্তের প্রাইসকেই entry candle এর open ধরা হচ্ছে
+
+    // ~৬৫ সেকেন্ড অপেক্ষা (candle বন্ধ হওয়া পর্যন্ত)
+    await new Promise(r => setTimeout(r, 65 * 1000));
+    if (!isRealMarketOpen()) return; // মাঝপথে মার্কেট বন্ধ হয়ে গেলে থেমে যাওয়া
+
+    const closeCandles1 = await getCandles(symbol);
+    const closePrice1 = closeCandles1[closeCandles1.length - 1].close;
+
+    const isDirectWin = direction === 'UP⏫' ? closePrice1 > openPrice1 : closePrice1 < openPrice1;
+
+    if (isDirectWin) {
+      dailyStats.directWin++;
+      getUserStats(userId).directWin++;
+      console.log(`✅ Direct Win: user ${userId} | ${symbol} | Open:${openPrice1} Close:${closePrice1}`);
+      return;
+    }
+
+    // ━━━ STEP 2 — MTG candle (পরের ১ মিনিট) ━━━
+    console.log(`⚠️ Direct Loss — checking MTG for user ${userId} | ${symbol}`);
+    const openPrice2 = closePrice1; // এই মুহূর্তের close-ই পরের candle এর open
+
+    await new Promise(r => setTimeout(r, 65 * 1000));
+    if (!isRealMarketOpen()) return;
+
+    const closeCandles2 = await getCandles(symbol);
+    const closePrice2 = closeCandles2[closeCandles2.length - 1].close;
+
+    const isMtgWin = direction === 'UP⏫' ? closePrice2 > openPrice2 : closePrice2 < openPrice2;
+
+    if (isMtgWin) {
+      dailyStats.mtgWin++;
+      getUserStats(userId).mtgWin++;
+      console.log(`🟡 MTG Win: user ${userId} | ${symbol} | Open:${openPrice2} Close:${closePrice2}`);
+    } else {
+      dailyStats.loss++;
+      getUserStats(userId).loss++;
+      console.log(`🔴 Final Loss: user ${userId} | ${symbol}`);
+    }
+  } catch (e) {
+    console.log('⚠️ trackSignalResult error for', symbol, '-', e.message);
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 let db;
 async function connectDB() {
@@ -104,7 +243,6 @@ async function connectDB() {
     trialScreenshotCount.set(u.userId, u.screenshotCount || 0);
   });
 
-  // Indexes — বড় user base এ query fast রাখার জন্য
   await db.collection('startedUsers').createIndex({ userId: 1 }, { unique: true });
   await db.collection('approvedUsers').createIndex({ userId: 1 }, { unique: true });
   await db.collection('bannedUsers').createIndex({ userId: 1 }, { unique: true });
@@ -184,11 +322,9 @@ function generateApiKey() {
   return `QX_${part1}${part2}_XAAN`;
 }
 
-// নিচে কোনো keyboard নেই
 const approvedKeyboard = { remove_keyboard: true };
 const trialKeyboard = { remove_keyboard: true };
 
-// Signal message এর নিচে inline button
 const signalInlineKeyboard = {
   inline_keyboard: [
     [
@@ -200,25 +336,27 @@ const signalInlineKeyboard = {
   ]
 };
 
-const pairs = [
-  'EUR/USD OTC', 'GBP/USD OTC', 'USD/JPY OTC',
-  'AUD/USD OTC', 'USD/CAD OTC', 'EUR/GBP OTC',
-  'EUR/NZD OTC', 'GBP/NZD OTC', 'USD/PKR OTC',
-  'USD/INR OTC', 'USD/BDT OTC', 'USD/IDR OTC',
-  'CAD/CHF OTC', 'EUR/JPY OTC', 'GBP/JPY OTC',
-  'USD/CHF OTC'
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ✅ পরিবর্তিত — pair list এখন dynamic (market open/closed অনুযায়ী OTC label বসে/বাদ যায়)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const livePairSymbols = [
+  'EUR/USD', 'GBP/USD', 'USD/JPY',
+  'AUD/USD', 'USD/CAD', 'EUR/GBP',
+  'EUR/NZD', 'GBP/NZD', 'USD/PKR',
+  'USD/INR', 'USD/BDT', 'USD/IDR',
+  'CAD/CHF', 'EUR/JPY', 'GBP/JPY',
+  'USD/CHF'
 ];
 
-const pairSymbolMap = {
-  'EUR/USD OTC': 'EUR/USD', 'GBP/USD OTC': 'GBP/USD',
-  'USD/JPY OTC': 'USD/JPY', 'AUD/USD OTC': 'AUD/USD',
-  'USD/CAD OTC': 'USD/CAD', 'EUR/GBP OTC': 'EUR/GBP',
-  'EUR/NZD OTC': 'EUR/NZD', 'GBP/NZD OTC': 'GBP/NZD',
-  'USD/PKR OTC': 'USD/PKR', 'USD/INR OTC': 'USD/INR',
-  'USD/BDT OTC': 'USD/BDT', 'USD/IDR OTC': 'USD/IDR',
-  'CAD/CHF OTC': 'CAD/CHF', 'EUR/JPY OTC': 'EUR/JPY',
-  'GBP/JPY OTC': 'GBP/JPY', 'USD/CHF OTC': 'USD/CHF'
-};
+function getDisplayPairs() {
+  const marketOpen = isRealMarketOpen();
+  return livePairSymbols.map(sym => marketOpen ? sym : sym + ' OTC');
+}
+
+function symbolFromDisplayPair(displayPair) {
+  return displayPair.replace(' OTC', '');
+}
 
 async function getCandles(symbol) {
   const data = await twelveData.getTimeSeries(symbol, '1min', 30);
@@ -289,8 +427,8 @@ function analyzePriceAction(candles) {
   return { pattern: 'No clear pattern', direction: 'NEUTRAL' };
 }
 
-async function analyzeSignal(otcPair) {
-  const symbol = pairSymbolMap[otcPair];
+async function analyzeSignal(displayPair) {
+  const symbol = symbolFromDisplayPair(displayPair);
   const candles = await getCandles(symbol);
   const rsi = calcRSI(candles);
   const trend = analyzeTrend(candles);
@@ -316,17 +454,18 @@ async function analyzeSignal(otcPair) {
   else if (ratio >= 0.65) { confidence = 'High 🟢'; winRate = '80%'; }
   else { confidence = 'Medium 🟡'; winRate = '75%'; }
 
-  return { direction, confidence, winRate, trend, rsi: rsi.toFixed(1), pattern: priceAction.pattern };
+  return { direction, confidence, winRate, trend, rsi: rsi.toFixed(1), pattern: priceAction.pattern, symbol };
 }
 
 function sendPairMenu(chatId) {
+  const displayPairs = getDisplayPairs();
   const keyboard = [];
-  for (let i = 0; i < pairs.length; i += 2) {
-    const row = [{ text: pairs[i], callback_data: pairs[i] }];
-    if (pairs[i + 1]) row.push({ text: pairs[i + 1], callback_data: pairs[i + 1] });
+  for (let i = 0; i < displayPairs.length; i += 2) {
+    const row = [{ text: displayPairs[i], callback_data: displayPairs[i] }];
+    if (displayPairs[i + 1]) row.push({ text: displayPairs[i + 1], callback_data: displayPairs[i + 1] });
     keyboard.push(row);
   }
-  bot.sendMessage(chatId, '📈 𝗖𝗵𝗼𝗼𝘀𝗲 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖) 👇', {
+  bot.sendMessage(chatId, '📈 𝗖𝗵𝗼𝗼𝘀𝗲 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 👇', {
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: keyboard }
   });
@@ -349,7 +488,6 @@ function sendVerifyPrompt(chatId) {
   );
 }
 
-// Deep Analysis স্টেপ
 const deepAnalysisSteps = [
   '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
   '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...',
@@ -357,7 +495,6 @@ const deepAnalysisSteps = [
 ];
 
 async function runLoadingBar(chatId) {
-  // ধাপ ১ — প্রাথমিক লোডিং মেসেজ
   const bd0 = new Date(Date.now() + 6 * 60 * 60 * 1000);
   const bdStr = String(bd0.getUTCHours()).padStart(2,'0') + ':' + String(bd0.getUTCMinutes()).padStart(2,'0') + ':' + String(bd0.getUTCSeconds()).padStart(2,'0');
 
@@ -369,7 +506,6 @@ async function runLoadingBar(chatId) {
   );
 
   if (!loadMsg) {
-    // sendMessage patch এ আটকে গেলে (বা Telegram থেকে fail করলে) এখানে থেমে যাওয়া দরকার
     throw new Error('runLoadingBar: initial loading message পাঠানো যায়নি');
   }
 
@@ -377,9 +513,8 @@ async function runLoadingBar(chatId) {
 
   await new Promise(r => setTimeout(r, 1500));
 
-  // ধাপ ২ — Deep Analysis (countdown সহ)
   const startTime = Date.now();
-  const totalWaitMs = 20000; // মোট ~20 সেকেন্ড analysis সময়
+  const totalWaitMs = 20000;
 
   return new Promise((resolve) => {
     const interval = setInterval(async () => {
@@ -455,32 +590,32 @@ bot.onText(/\/start/, async (msg) => {
     );
   }
 
-  const welcomeCore =
-    '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
-    '🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n\n' +
-    '⚡ 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 𝗦𝘆𝘀𝘁𝗲𝗺\n' +
-    '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
-    '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
-    '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n';
-
   if (isApproved(userId)) {
     await bot.sendMessage(chatId,
-      welcomeCore +
-      '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅\n\n' +
-      '╰━━━━━━━━━━━━━━━━━━━━╯\n\n' +
-      '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
-      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗮 𝗥𝗘𝗔𝗟 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿\n' +
-      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
+      '    🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n' +
+      '╰━━━━━━━━━━━━━━━━━━━━╯\n' +
+      '⚡ 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 𝗦𝘆𝘀𝘁𝗲𝗺\n' +
+      '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+      '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+      '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
+      '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
-    await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹📊', callback_data: 'new_signal' }],
-          [{ text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }]
-        ]
+    await bot.sendMessage(chatId,
+      '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
+      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+          ]
+        }
       }
-    });
+    );
     return;
   }
 
@@ -489,7 +624,13 @@ bot.onText(/\/start/, async (msg) => {
 
   if (signalLeft > 0 || screenshotLeft > 0) {
     await bot.sendMessage(chatId,
-      welcomeCore +
+      '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
+      '    🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n' +
+      '╰━━━━━━━━━━━━━━━━━━━━╯\n' +
+      '⚡ 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 𝗦𝘆𝘀𝘁𝗲𝗺\n' +
+      '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+      '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+      '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
       '🎁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹\n' +
       '📈 𝗦𝗶𝗴𝗻𝗮𝗹𝘀 𝗟𝗲𝗳𝘁: 0' + signalLeft + '/0' + FREE_TRIAL_SIGNAL + '\n' +
       '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: 0' + screenshotLeft + '/0' + FREE_TRIAL_SCREENSHOT + '\n\n' +
@@ -514,10 +655,15 @@ bot.onText(/\/start/, async (msg) => {
   }
 
   await bot.sendMessage(chatId,
-    welcomeCore +
+    '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
+    '    🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n' +
+    '╰━━━━━━━━━━━━━━━━━━━━╯\n' +
+    '⚡ 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 𝗦𝘆𝘀𝘁𝗲𝗺\n' +
+    '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+    '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
+    '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
     '🔒 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝘅𝗽𝗶𝗿𝗲𝗱!\n\n' +
-    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗮𝗻𝗱 𝘀𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘃𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻.\n\n' +
-    '╰━━━━━━━━━━━━━━━━━━━━╯',
+    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗮𝗻𝗱 𝘀𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘃𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻.',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -555,6 +701,7 @@ bot.onText(/\/admin/, async (msg) => {
           [{ text: '⏳ Pending Verify List', callback_data: 'admin_pending' }],
           [{ text: '📋 Trader ID Submissions', callback_data: 'admin_submissions' }],
           [{ text: '⚡ Affiliate Verified List', callback_data: 'admin_affiliate' }],
+          [{ text: '📊 Today Report Now', callback_data: 'admin_report_now' }],
           [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }],
           [{ text: '💬 Message a User', callback_data: 'admin_message_prompt' }],
           [{ text: '❌ Unapprove User', callback_data: 'admin_unapprove_prompt' }],
@@ -604,7 +751,7 @@ bot.onText(/\/ban (.+)/, async (msg, match) => {
   try { await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।'); } catch (e) { console.error('notify(ban) fail for', targetId, e.message); }
 });
 
-// /sessionstart — admin যেকোনো সময় manually session চালাতে পারবে
+// /sessionstart
 bot.onText(/\/sessionstart/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
   if (!sessionModule) { await bot.sendMessage(ADMIN_ID, '❌ Session module এখনো লোড হয়নি, একটু পর চেষ্টা করুন।'); return; }
@@ -619,7 +766,7 @@ bot.onText(/\/sessionstart/, async (msg) => {
   });
 });
 
-// /msg — নির্দিষ্ট user কে সরাসরি personal message পাঠানো: /msg <user_id> <message>
+// /msg
 bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1]);
@@ -744,14 +891,20 @@ bot.on('message', async (msg) => {
         '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
         { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
       );
-      await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
-        reply_markup: {
-          inline_keyboard: [
-            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
-          ]
+      await bot.sendMessage(chatId,
+        '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
+        '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
+        '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+              [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+            ]
+          }
         }
-      });
+      );
     } else {
       await bot.sendMessage(chatId, '❌ ভুল API KEY! আবার চেষ্টা করুন।');
     }
@@ -767,7 +920,6 @@ bot.on('message', async (msg) => {
 
   verifyMode.delete(userId);
 
-  // ✅ Affiliate postback list এ চেক করা — থাকলে সাথে সাথেই auto-approve
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
   if (affRecord) {
@@ -785,7 +937,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // Affiliate list এ না থাকলে আগের মতোই ম্যানুয়াল approval flow
   await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(ADMIN_ID,
@@ -798,10 +949,8 @@ bot.on('message', async (msg) => {
   );
 });
 
-// একই user এর একাধিক concurrent signal request ঠেকানোর জন্য lock
 const signalInProgress = new Set();
 
-// Signal generate করার common function
 async function generateSignalForPair(chatId, userId, pair) {
   if (signalInProgress.has(userId)) {
     await bot.sendMessage(chatId, '⏳ আপনার আগের request এখনো process হচ্ছে, একটু অপেক্ষা করুন...');
@@ -810,13 +959,11 @@ async function generateSignalForPair(chatId, userId, pair) {
   signalInProgress.add(userId);
 
   try {
-    // আগের signal message delete করা
     if (lastSignalMsgId.has(userId)) {
       try { await bot.deleteMessage(chatId, lastSignalMsgId.get(userId)); } catch (e) {}
       lastSignalMsgId.delete(userId);
     }
 
-    // Trial check
     let isLastTrial = false;
     if (!isApproved(userId)) {
       if (getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); signalInProgress.delete(userId); return; }
@@ -831,9 +978,7 @@ async function generateSignalForPair(chatId, userId, pair) {
       }
     }
 
-    // Loading + Deep Analysis (নতুন combined ফরম্যাট)
     const loadMsgId = await runLoadingBar(chatId);
-
     try { await bot.deleteMessage(chatId, loadMsgId); } catch (e) {}
 
     let signal;
@@ -842,7 +987,7 @@ async function generateSignalForPair(chatId, userId, pair) {
     } catch (e) {
       console.error('analyzeSignal fail for', pair, '-', e.message);
       const directions = ['UP⏫', 'DOWN⏬'];
-      signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%' };
+      signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%', symbol: symbolFromDisplayPair(pair) };
     }
 
     const now2 = new Date();
@@ -864,8 +1009,10 @@ async function generateSignalForPair(chatId, userId, pair) {
       }
     );
 
-    // নতুন signal message id save করা (sendMessage patch এ আটকে গেলে sentMsg null হতে পারে)
     if (sentMsg) lastSignalMsgId.set(userId, sentMsg.message_id);
+
+    // ✅ নতুন — সিগন্যাল পাঠানোর পর ব্যাকগ্রাউন্ডে result ট্র্যাক করা (শুধু Real Market সময়ে কাজ করবে)
+    trackSignalResult(userId, signal.symbol, signal.direction).catch(e => console.log('trackSignalResult error:', e.message));
   } catch (e) {
     console.error('generateSignalForPair error:', e.message);
     try { await bot.sendMessage(chatId, '❌ Signal তৈরি করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।'); } catch (err) {}
@@ -886,14 +1033,12 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // New signal button
   if (pair === 'new_signal') {
     if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
     sendPairMenu(chatId);
     return;
   }
 
-  // Screenshot analysis button
   if (pair === 'screenshot_analysis') {
     if (!isApproved(userId)) {
       if (getTrialScreenshotLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
@@ -982,6 +1127,13 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // ✅ নতুন — যেকোনো সময় ম্যানুয়ালি এখনকার পর্যন্ত রিপোর্ট দেখার বাটন
+  if (pair === 'admin_report_now' && userId === ADMIN_ID) {
+    ensureDailyStatsFresh();
+    await bot.sendMessage(ADMIN_ID, buildDailyAdminReport(), { parse_mode: 'Markdown' });
+    return;
+  }
+
   if (pair === 'admin_broadcast' && userId === ADMIN_ID) {
     broadcastMode.add(ADMIN_ID);
     await bot.sendMessage(ADMIN_ID, '📢 যে message সব user কে পাঠাতে চাও সেটা লেখো:');
@@ -1065,7 +1217,8 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  if (!pairs.includes(pair)) return;
+  // ✅ পরিবর্তিত — pair validation এখন dynamic OTC/Live label উভয় ফরম্যাট মেনে চলে
+  if (!livePairSymbols.includes(symbolFromDisplayPair(pair))) return;
 
   if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
 
@@ -1080,6 +1233,33 @@ bot.on('sticker', async (msg) => {
     { parse_mode: 'Markdown' }
   );
 });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ✅ নতুন — মধ্যরাত ১২টায় ১০-১৫ মিনিট রেস্ট + Daily Admin Report scheduler
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+setInterval(async () => {
+  try {
+    const { hour, minute } = getBDTimeInfo();
+    const dateKeyNow = currentBDDateKey();
+
+    if (hour === 0 && minute >= 2 && minute <= 6 && lastReportDateKey !== dateKeyNow) {
+      lastReportDateKey = dateKeyNow;
+      ensureDailyStatsFresh();
+      try {
+        await bot.sendMessage(ADMIN_ID, buildDailyAdminReport(), { parse_mode: 'Markdown' });
+        console.log('📊 Daily admin report sent for', dailyStats.dateKey);
+      } catch (e) {
+        console.log('Daily report send error:', e.message);
+      }
+      // রিপোর্ট পাঠানোর পর counters রিসেট হয়ে যাবে (নতুন দিনের জন্য প্রস্তুত)
+      dailyStats = { dateKey: dateKeyNow, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
+      userDailyStats.clear();
+    }
+  } catch (e) {
+    console.error('Daily report scheduler error:', e.message);
+  }
+}, 60 * 1000);
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🔗 QUOTEX AFFILIATE POSTBACK SERVER
@@ -1118,7 +1298,7 @@ app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT
 connectDB().then(() => {
   sessionModule = require('./session');
   sessionModule(bot);
-  console.log('Bot running v20 - Free Trial System + Affiliate Postback Auto-Verify...');
+  console.log('Bot running v21 - Market-Aware Pairs + Result Tracking + Daily Admin Report...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
