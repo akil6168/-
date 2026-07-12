@@ -289,8 +289,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     if (isApproved(userId) && userId !== ADMIN_ID) {
       const count = getUserCount(userId);
       if (count >= 5) {
+        // ✅ পরিবর্তিত — Today's AI Screenshot Limit Reached
         await bot.sendMessage(chatId,
-          '📊 আজকের AI Screenshot analysis লিমিট শেষ!\n\n➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
+          '⚠️ 𝗧𝗼𝗱𝗮𝘆\'𝘀 𝗔𝗜 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗟𝗶𝗺𝗶𝘁 𝗥𝗲𝗮𝗰𝗵𝗲𝗱!\n\n' +
+          '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊 বাটন ব্যবহার করে নতুন Signal নিন।',
           { parse_mode: 'Markdown' }
         );
         return;
@@ -306,12 +308,14 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
+    // ✅ পরিবর্তিত — প্রাথমিক লোডিং মেসেজ
     const loadMsg = await bot.sendMessage(chatId,
-      '🧠 *AI Deep Analysis শুরু হচ্ছে...*\n\n' +
-      '⏰ Signal দেওয়া হবে: *' + waitSeconds + ' seconds* পরে\n\n' +
-      '🔍 Candlestick • Trend • Price Action\n' +
-      '📈 S/R • Momentum • SMC • Volume\n' +
-      '💡 ADX • Supertrend • Ichimoku • VWAP',
+      '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
+      '⏳ 𝗣𝗿𝗲𝗽𝗮𝗿𝗶𝗻𝗴 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹...\n' +
+      '⏰ 𝗘𝘀𝘁𝗶𝗺𝗮𝘁𝗲𝗱 𝗧𝗶𝗺𝗲: ' + waitSeconds + 's\n\n' +
+      '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...\n' +
+      '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...\n' +
+      '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...',
       { parse_mode: 'Markdown' }
     );
 
@@ -319,15 +323,15 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const countdownInterval = setInterval(async () => {
       remaining--;
       const { h, m, s } = getBDTime();
+      // ✅ পরিবর্তিত — countdown মেসেজ
       try {
         await bot.editMessageText(
-          '🧠 *AI Deep Chart Analysis*\n\n' +
-          '⏰ BD Time: *' + h + ':' + m + ':' + s + '*\n' +
-          '⏳ Signal আসছে: *' + remaining + ' seconds* পরে\n\n' +
-          '🔍 Candlestick • Heikin Ashi • SMC • Wyckoff\n' +
-          '📊 RSI • MACD • Stochastic • ADX • CCI\n' +
-          '📈 Ichimoku • Supertrend • VWAP • Volume Profile\n' +
-          '💡 Fibonacci • Pivot Points • Session Levels',
+          '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
+          '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲: ' + h + ':' + m + ':' + s + '\n' +
+          '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻: ' + remaining + 's\n\n' +
+          '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...\n' +
+          '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...\n' +
+          '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...',
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
@@ -360,8 +364,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
 
       if (signal.notAChart) {
         try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
+        // ✅ পরিবর্তিত — Invalid Chart
         await bot.sendMessage(chatId,
-          '❌ *এটা trading chart না!*\n\n📸 শুধুমাত্র *Quotex chart screenshot* পাঠান।',
+          '⚠️ 𝗜𝗻𝘃𝗮𝗹𝗶𝗱 𝗖𝗵𝗮𝗿𝘁!\n\n' +
+          '📸 𝗣𝗹𝗲𝗮𝘀𝗲 𝘂𝗽𝗹𝗼𝗮𝗱 𝗮 𝗰𝗹𝗲𝗮𝗿 𝗤𝘂𝗼𝘁𝗲𝘅 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁',
           { parse_mode: 'Markdown' }
         );
         return;
@@ -373,8 +379,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         await incrementTrialScreenshot(userId);
         const left = getTrialScreenshotLeft(userId);
         if (left === 0) {
+          // ✅ পরিবর্তিত — Last Free Trial Screenshot
           await bot.sendMessage(chatId,
-            '⚠️ এটা আপনার *শেষ Free Trial screenshot!*\n\nVerify করুন unlimited access পেতে।',
+            '⚠️ 𝗟𝗮𝘀𝘁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁!\n\n' +
+            '🔓 𝗩𝗲𝗿𝗶𝗳𝘆 𝘆𝗼𝘂𝗿 𝗮𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝘂𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀.',
             { parse_mode: 'Markdown' }
           );
         }
@@ -386,8 +394,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
           ? String(5 - getUserCount(userId))
           : String(getTrialScreenshotLeft(userId));
 
-      const limitLabel = isApproved(userId) ? 'আজকের বাকি' : 'Trial বাকি';
-
+      const dirLabel = signal.direction === 'UP' ? '🟢 BUY' : '🔴 SELL';
       const dirEmoji = signal.direction === 'UP' ? '⏫' : '⏬';
       let confEmoji = '🟡';
       const confLower = (signal.confidence || '').toLowerCase();
@@ -396,22 +403,22 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
 
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
+      // ✅ পরিবর্তিত — চূড়ান্ত সিগন্যাল রেজাল্ট মেসেজ
       const sentMsg = await bot.sendMessage(chatId,
-        '╭──────────────────╮\n' +
-        '│  🧠 *AI Deep Chart Analysis*\n' +
-        '╰──────────────────╯\n\n' +
-        '🚀 *DIRECTION* ➜ ' + signal.direction + ' ' + dirEmoji + '\n' +
-        '📊 *ENTRY*        ➜ `' + entry + '`\n' +
-        '⏱ *EXPIRY*      ➜ `' + expiry + '`\n' +
-        '══════════════════\n' +
-        '♻️ *WIN RATE*    ➜ `' + signal.winRate + '`\n' +
-        '✅ *CONFIDENCE* ➜ ' + signal.confidence + ' ' + confEmoji + '\n' +
-        '🔀 *TREND*        ➜ `' + signal.trend + '`\n' +
-        '══════════════════\n' +
-        '💡 _' + signal.reason + '_\n' +
-        '══════════════════\n' +
-        '📸 ' + limitLabel + ': *' + remainingCount + '*\n' +
-        '⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️',
+        '╔════════════════════╗\n' +
+        '🧠 𝗔𝗜 𝗖𝗛𝗔𝗥𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n' +
+        '╚════════════════════╝\n\n' +
+        '📈 𝗗𝗜𝗥𝗘𝗖𝗧𝗜𝗢𝗡 ➜ ' + dirLabel + ' ' + dirEmoji + '\n' +
+        '🕒 𝗘𝗡𝗧𝗥𝗬     ➜ ' + entry + '\n' +
+        '⏳ 𝗘𝗫𝗣𝗜𝗥𝗬    ➜ ' + expiry + '\n\n' +
+        '━━━━━━━━━━━━━━━━\n\n' +
+        '🎯 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ' + signal.confidence + ' ' + confEmoji + ' (' + signal.winRate + ')\n' +
+        '📊 𝗧𝗥𝗘𝗡𝗗 ➜ ' + signal.trend + '\n\n' +
+        '💡 𝗔𝗜 𝗩𝗜𝗘𝗪\n' +
+        signal.reason + '\n\n' +
+        '━━━━━━━━━━━━━━━━\n\n' +
+        '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: *' + remainingCount + '/5*\n\n' +
+        '⚠️ 𝗠𝗮𝘅 𝟭 𝗦𝘁𝗲𝗽 𝗠𝗧𝗚',
         {
           parse_mode: 'Markdown',
           reply_markup: signalInlineKeyboard
