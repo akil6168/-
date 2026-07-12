@@ -75,13 +75,13 @@ function mentionUser(userId, username, firstName) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ নতুন — Daily result-tracking state (per-user + global)
+// ✅ Daily result-tracking state (per-user + global)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 let dailyStats = { dateKey: null, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
-const userDailyStats = new Map(); // userId -> { directWin, mtgWin, loss }
+const userDailyStats = new Map();
 let lastReportDateKey = null;
-let resultRestActive = false; // মধ্যরাত ১০-১৫ মিনিট রেস্ট চলছে কিনা
+let resultRestActive = false;
 
 function currentBDDateKey() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
@@ -100,18 +100,17 @@ function getBDTimeInfo() {
     hour: bd.getUTCHours(),
     minute: bd.getUTCMinutes(),
     second: bd.getUTCSeconds(),
-    day: bd.getUTCDay() // 0=রবি, 1=সোম, 5=শুক্র, 6=শনি
+    day: bd.getUTCDay()
   };
 }
 
-// Real (Live) market খোলা কিনা — সোম ১১AM থেকে শুক্র ১১PM (BD Time), প্রতিদিন ১১AM-১১PM
 function isRealMarketOpen() {
   const { hour, day } = getBDTimeInfo();
-  if (day === 6) return false; // শনিবার সম্পূর্ণ বন্ধ
-  if (day === 0) return false; // রবিবার সম্পূর্ণ বন্ধ
-  if (day === 1 && hour < 11) return false; // সোমবার সকাল ১১টার আগে বন্ধ
-  if (day === 5 && hour >= 23) return false; // শুক্রবার রাত ১১টার পর বন্ধ
-  if (hour < 11 || hour >= 23) return false; // প্রতিদিন ১১PM-১১AM বন্ধ
+  if (day === 6) return false;
+  if (day === 0) return false;
+  if (day === 1 && hour < 11) return false;
+  if (day === 5 && hour >= 23) return false;
+  if (hour < 11 || hour >= 23) return false;
   return true;
 }
 
@@ -160,23 +159,19 @@ function buildDailyAdminReport() {
   );
 }
 
-// ✅ নতুন — একটা সিগন্যালের result ব্যাকগ্রাউন্ডে যাচাই করা (Direct candle → লস হলে ১ ধাপ MTG)
-// শুধু Real Market সময়ে (weekday, 11AM-11PM BD) কাজ করবে
 async function trackSignalResult(userId, symbol, direction) {
-  if (!isRealMarketOpen()) return; // Real market বন্ধ থাকলে ট্র্যাক করা হবে না
+  if (!isRealMarketOpen()) return;
 
   ensureDailyStatsFresh();
   dailyStats.activeUsers.add(userId);
   dailyStats.totalSignals++;
 
   try {
-    // ━━━ STEP 1 — Direct candle: এই মিনিটের শুরুতে open price ━━━
     const openCandles1 = await getCandles(symbol);
-    const openPrice1 = openCandles1[openCandles1.length - 1].close; // বর্তমান মুহূর্তের প্রাইসকেই entry candle এর open ধরা হচ্ছে
+    const openPrice1 = openCandles1[openCandles1.length - 1].close;
 
-    // ~৬৫ সেকেন্ড অপেক্ষা (candle বন্ধ হওয়া পর্যন্ত)
     await new Promise(r => setTimeout(r, 65 * 1000));
-    if (!isRealMarketOpen()) return; // মাঝপথে মার্কেট বন্ধ হয়ে গেলে থেমে যাওয়া
+    if (!isRealMarketOpen()) return;
 
     const closeCandles1 = await getCandles(symbol);
     const closePrice1 = closeCandles1[closeCandles1.length - 1].close;
@@ -190,9 +185,8 @@ async function trackSignalResult(userId, symbol, direction) {
       return;
     }
 
-    // ━━━ STEP 2 — MTG candle (পরের ১ মিনিট) ━━━
     console.log(`⚠️ Direct Loss — checking MTG for user ${userId} | ${symbol}`);
-    const openPrice2 = closePrice1; // এই মুহূর্তের close-ই পরের candle এর open
+    const openPrice2 = closePrice1;
 
     await new Promise(r => setTimeout(r, 65 * 1000));
     if (!isRealMarketOpen()) return;
@@ -325,20 +319,17 @@ function generateApiKey() {
 const approvedKeyboard = { remove_keyboard: true };
 const trialKeyboard = { remove_keyboard: true };
 
+// ✅ পরিবর্তিত বাটন টেক্সট
 const signalInlineKeyboard = {
   inline_keyboard: [
     [
-      { text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' },
+      { text: '📊 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹', callback_data: 'new_signal' },
     ],
     [
-      { text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }
+      { text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }
     ]
   ]
 };
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ পরিবর্তিত — pair list এখন dynamic (market open/closed অনুযায়ী OTC label বসে/বাদ যায়)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const livePairSymbols = [
   'EUR/USD', 'GBP/USD', 'USD/JPY',
@@ -590,6 +581,7 @@ bot.onText(/\/start/, async (msg) => {
     );
   }
 
+  // ✅ পরিবর্তিত — Unlimited Access + Start Analysis এক মেসেজে মার্জ করা
   if (isApproved(userId)) {
     await bot.sendMessage(chatId,
       '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
@@ -599,19 +591,16 @@ bot.onText(/\/start/, async (msg) => {
       '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
       '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
       '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
-      '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅',
-      { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
-    );
-    await bot.sendMessage(chatId,
+      '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅\n\n' +
       '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
-      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
-      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿\n\n' +
+      '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲 👇',
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+            [{ text: '📊 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹', callback_data: 'new_signal' }],
+            [{ text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }]
           ]
         }
       }
@@ -622,6 +611,7 @@ bot.onText(/\/start/, async (msg) => {
   const signalLeft = getTrialSignalLeft(userId);
   const screenshotLeft = getTrialScreenshotLeft(userId);
 
+  // ✅ পরিবর্তিত — Free Trial + Start Analysis এক মেসেজে মার্জ করা
   if (signalLeft > 0 || screenshotLeft > 0) {
     await bot.sendMessage(chatId,
       '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
@@ -631,22 +621,20 @@ bot.onText(/\/start/, async (msg) => {
       '📊 𝗔𝗱𝘃𝗮𝗻𝗰𝗲𝗱 𝗧𝗿𝗮𝗱𝗲 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
       '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
       '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
-      '🎁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹\n' +
+      '🎁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹\n\n' +
       '📈 𝗦𝗶𝗴𝗻𝗮𝗹𝘀 𝗟𝗲𝗳𝘁: 0' + signalLeft + '/0' + FREE_TRIAL_SIGNAL + '\n' +
       '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: 0' + screenshotLeft + '/0' + FREE_TRIAL_SCREENSHOT + '\n\n' +
-      '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 🚀',
-      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
-    );
-    await bot.sendMessage(chatId,
+      '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁\n' +
+      '🚀 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
       '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
-      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
-      '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿\n\n' +
+      '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲 👇',
       {
         parse_mode: 'Markdown',
         reply_markup: {
           inline_keyboard: [
-            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+            [{ text: '📊 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹', callback_data: 'new_signal' }],
+            [{ text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }]
           ]
         }
       }
@@ -654,6 +642,7 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
 
+  // ✅ পরিবর্তিত — Free Trial Expired নতুন টেক্সট
   await bot.sendMessage(chatId,
     '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
     '    🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n' +
@@ -663,7 +652,9 @@ bot.onText(/\/start/, async (msg) => {
     '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗖𝗵𝗮𝗿𝘁 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n' +
     '👑 𝗣𝗿𝗲𝗺𝗶𝘂𝗺 𝗩𝗜𝗣 𝗔𝗰𝗰𝗲𝘀𝘀\n\n' +
     '🔒 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗘𝘅𝗽𝗶𝗿𝗲𝗱!\n\n' +
-    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝗮𝗻𝗱 𝘀𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝘁𝗼 𝗰𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝘃𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻.',
+    '📌 𝗖𝗿𝗲𝗮𝘁𝗲 𝗮 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁\n\n' +
+    '🆔 𝗦𝗲𝗻𝗱 𝘆𝗼𝘂𝗿 𝟴-𝗱𝗶𝗴𝗶𝘁 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗\n\n' +
+    '✅ 𝗖𝗼𝗺𝗽𝗹𝗲𝘁𝗲 𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻',
     {
       parse_mode: 'Markdown',
       reply_markup: {
@@ -715,14 +706,19 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// /approve
+// ✅ পরিবর্তিত — /approve কমান্ডে "Verification Success" নতুন টেক্সট
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
   if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ Format: /approve [user_id]'); return; }
   const apiKey = generateApiKey();
   passwordMode.set(targetId, apiKey);
-  await bot.sendMessage(targetId, '✅ *আপনার Trader ID verify হয়েছে!*\n\n🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`', { parse_mode: 'Markdown' });
+  await bot.sendMessage(targetId,
+    '✅ 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝗛𝗮𝘀 𝗕𝗲𝗲𝗻 𝗩𝗲𝗿𝗶𝗳𝗶𝗲𝗱!\n\n' +
+    '🔐 𝗘𝗻𝘁𝗲𝗿 𝗬𝗼𝘂𝗿 𝗔𝗣𝗜 𝗞𝗲𝘆\n\n' +
+    '🔑 𝗔𝗣𝗜 𝗞𝗘𝗬:\n`' + apiKey + '`',
+    { parse_mode: 'Markdown' }
+  );
   await bot.sendMessage(ADMIN_ID, '✅ *User `' + targetId + '` কে approve করা হয়েছে।*\n🔑 API KEY: `' + apiKey + '`', { parse_mode: 'Markdown' });
 });
 
@@ -882,25 +878,24 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ✅ পরিবর্তিত — password verify success: Bot Access Activated + Start Analysis এক মেসেজে মার্জ
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
       passwordMode.delete(userId);
       await addApprovedUser(userId);
       await bot.sendMessage(chatId,
-        '🎉 *Bot access পেয়েছেন!*\n\n📊 নিচের বাটনে ক্লিক করে signal নিন।',
-        { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
-      );
-      await bot.sendMessage(chatId,
+        '🎉 𝗕𝗼𝘁 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗮𝘁𝗲𝗱!\n\n' +
+        '📊 𝗖𝗹𝗶𝗰𝗸 𝘁𝗵𝗲 𝗯𝘂𝘁𝘁𝗼𝗻 𝗯𝗲𝗹𝗼𝘄 𝘁𝗼 𝗴𝗲𝘁 𝘆𝗼𝘂𝗿 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹. 🚀\n\n' +
         '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
-        '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
-        '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
+        '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿\n\n' +
+        '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲 👇',
         {
           parse_mode: 'Markdown',
           reply_markup: {
             inline_keyboard: [
-              [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-              [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+              [{ text: '📊 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹', callback_data: 'new_signal' }],
+              [{ text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }]
             ]
           }
         }
@@ -922,12 +917,15 @@ bot.on('message', async (msg) => {
 
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
+  // ✅ পরিবর্তিত — auto-verify (affiliate postback) মেসেজে নতুন "Verification Success" টেক্সট
   if (affRecord) {
     const apiKey = generateApiKey();
     passwordMode.set(userId, apiKey);
     await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), autoVerified: true });
     await bot.sendMessage(chatId,
-      '✅ *আপনার Trader ID স্বয়ংক্রিয়ভাবে verify হয়েছে!*\n\n🔐 Bot access করতে আপনার *API KEY* দিন: `' + apiKey + '`',
+      '✅ 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝗛𝗮𝘀 𝗕𝗲𝗲𝗻 𝗩𝗲𝗿𝗶𝗳𝗶𝗲𝗱!\n\n' +
+      '🔐 𝗘𝗻𝘁𝗲𝗿 𝗬𝗼𝘂𝗿 𝗔𝗣𝗜 𝗞𝗲𝘆\n\n' +
+      '🔑 𝗔𝗣𝗜 𝗞𝗘𝗬:\n`' + apiKey + '`',
       { parse_mode: 'Markdown' }
     );
     await bot.sendMessage(ADMIN_ID,
@@ -1011,7 +1009,6 @@ async function generateSignalForPair(chatId, userId, pair) {
 
     if (sentMsg) lastSignalMsgId.set(userId, sentMsg.message_id);
 
-    // ✅ নতুন — সিগন্যাল পাঠানোর পর ব্যাকগ্রাউন্ডে result ট্র্যাক করা (শুধু Real Market সময়ে কাজ করবে)
     trackSignalResult(userId, signal.symbol, signal.direction).catch(e => console.log('trackSignalResult error:', e.message));
   } catch (e) {
     console.error('generateSignalForPair error:', e.message);
@@ -1127,7 +1124,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ✅ নতুন — যেকোনো সময় ম্যানুয়ালি এখনকার পর্যন্ত রিপোর্ট দেখার বাটন
   if (pair === 'admin_report_now' && userId === ADMIN_ID) {
     ensureDailyStatsFresh();
     await bot.sendMessage(ADMIN_ID, buildDailyAdminReport(), { parse_mode: 'Markdown' });
@@ -1217,7 +1213,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ✅ পরিবর্তিত — pair validation এখন dynamic OTC/Live label উভয় ফরম্যাট মেনে চলে
   if (!livePairSymbols.includes(symbolFromDisplayPair(pair))) return;
 
   if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
@@ -1235,7 +1230,7 @@ bot.on('sticker', async (msg) => {
 });
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ নতুন — মধ্যরাত ১২টায় ১০-১৫ মিনিট রেস্ট + Daily Admin Report scheduler
+// ✅ মধ্যরাত ১২টায় Daily Admin Report scheduler
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 setInterval(async () => {
@@ -1252,7 +1247,6 @@ setInterval(async () => {
       } catch (e) {
         console.log('Daily report send error:', e.message);
       }
-      // রিপোর্ট পাঠানোর পর counters রিসেট হয়ে যাবে (নতুন দিনের জন্য প্রস্তুত)
       dailyStats = { dateKey: dateKeyNow, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
       userDailyStats.clear();
     }
