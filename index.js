@@ -469,15 +469,15 @@ bot.onText(/\/start/, async (msg) => {
       '👑 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 𝗔𝗰𝘁𝗶𝘃𝗲 ✅\n\n' +
       '╰━━━━━━━━━━━━━━━━━━━━╯\n\n' +
       '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
-      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
+      '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗮 𝗥𝗘𝗔𝗟 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿\n' +
       '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
       { parse_mode: 'Markdown', reply_markup: approvedKeyboard }
     );
     await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
       reply_markup: {
         inline_keyboard: [
-          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-          [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹📊', callback_data: 'new_signal' }],
+          [{ text: '📸 𝗨𝗽𝗹𝗼𝗮𝗱 𝗖𝗵𝗮𝗿𝘁 𝗜𝗺𝗮𝗴𝗲', callback_data: 'screenshot_analysis' }]
         ]
       }
     });
