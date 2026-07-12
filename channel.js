@@ -1,4 +1,4 @@
-// channel.js - Qx AI Predictor VIP (v5.0 - 20 High Accuracy Indicators)
+// channel.js - Qx AI Predictor VIP (v5.1 - 20 High Accuracy Indicators + Daily Report)
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -56,6 +56,10 @@ let liveCount = 0;
 let noLiveCount = 0;
 let lastSignalKey = '';
 
+// ✅ নতুন — ডেইলি স্ট্যাটস ট্র্যাকিং
+let dailyStats = { dateKey: null, total: 0, wins: 0, losses: 0 };
+let reportSentDateKey = null;
+
 function getBDTime() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
   const h = bd.getUTCHours(), m = bd.getUTCMinutes(), s = bd.getUTCSeconds();
@@ -69,6 +73,30 @@ function getBDTime() {
     bd,
     display: `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h >= 12 ? 'PM' : 'AM'}`
   };
+}
+
+// ✅ নতুন — বর্তমান BD তারিখ (YYYY-MM-DD) ও রিপোর্ট ডেট ফরম্যাটিং হেল্পার
+function currentDateKey() {
+  const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+  return `${bd.getUTCFullYear()}-${String(bd.getUTCMonth() + 1).padStart(2, '0')}-${String(bd.getUTCDate()).padStart(2, '0')}`;
+}
+
+function formatReportDate(dateKeyStr) {
+  const months = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const [y, mo, d] = dateKeyStr.split('-').map(Number);
+  return `${d} ${months[mo - 1]} ${y}`;
+}
+
+// ✅ নতুন — যেকোনো টেক্সটকে Mathematical Sans-Bold Unicode এ কনভার্ট করার হেল্পার
+// (এটা দিয়ে ডাইনামিক ভ্যালু যেমন তারিখ, সংখ্যা, win rate ইত্যাদিও ঠিক একই বোল্ড স্টাইলে দেখানো যায়)
+function toBoldSans(str) {
+  return String(str).split('').map(ch => {
+    const code = ch.charCodeAt(0);
+    if (ch >= 'A' && ch <= 'Z') return String.fromCodePoint(0x1D5D4 + (code - 65));
+    if (ch >= 'a' && ch <= 'z') return String.fromCodePoint(0x1D5EE + (code - 97));
+    if (ch >= '0' && ch <= '9') return String.fromCodePoint(0x1D7EC + (code - 48));
+    return ch;
+  }).join('');
 }
 
 function getEntryExpiry() {
@@ -93,10 +121,12 @@ function isLiveMarketOpen() {
   return true;
 }
 
+// ✅ পরিবর্তিত — মধ্যরাতে পজ উইন্ডো এখন ১২:০০ থেকে ১২:১৯ পর্যন্ত (আগে ছিল ১২:০০-১২:০২)
+// এতে ৪ মিনিট sleep + রিপোর্ট পাঠানোর সময় + ১২:২০ এ আবার শুরু হওয়ার পুরো ফ্লো কভার হয়
 function isRolloverTime() {
   const { hour, minute } = getBDTime();
   if (hour === 23 && minute >= 58) return true;
-  if (hour === 0 && minute <= 2) return true;
+  if (hour === 0 && minute < 20) return true;
   return false;
 }
 
@@ -150,7 +180,6 @@ function buildHigherTF(candles1m, period) {
 // 📈 ২০টি হাই-অ্যাকুরেসি ইন্ডিকেটর
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// 1. RSI (14)
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let gain = 0, loss = 0;
@@ -161,10 +190,8 @@ function calcRSI(candles, period = 14) {
   return 100 - (100 / (1 + gain / (loss || 1)));
 }
 
-// 2. MACD
 function calcMACD(candles) { return calcEMA(candles, 12) - calcEMA(candles, 26); }
 
-// 3. ADX
 function calcADX(candles, period = 14) {
   if (candles.length < period + 1) return { adx: 0, plusDI: 0, minusDI: 0 };
   let plusDM = [], minusDM = [], tr = [];
@@ -187,7 +214,6 @@ function calcADX(candles, period = 14) {
   return { adx, plusDI, minusDI };
 }
 
-// 4. Bollinger Bands
 function calcBB(candles, period = 20) {
   const p = Math.min(period, candles.length);
   const closes = candles.slice(-p).map(c => c.close);
@@ -196,7 +222,6 @@ function calcBB(candles, period = 20) {
   return { upper: sma + 2 * std, lower: sma - 2 * std, mid: sma };
 }
 
-// 5. Supertrend
 function calcSupertrend(candles, period = 10, multiplier = 3) {
   const atr = calcATR(candles, period);
   const last = candles[candles.length - 1];
@@ -210,7 +235,6 @@ function calcSupertrend(candles, period = 10, multiplier = 3) {
   return { dir };
 }
 
-// 6. VWAP
 function calcVWAP(candles) {
   let cumPV = 0, cumVol = 0;
   const recent = candles.slice(-30);
@@ -225,7 +249,6 @@ function calcVWAP(candles) {
   return { dir: last > vwap ? 'UP' : 'DOWN' };
 }
 
-// 7. ATR
 function calcATR(candles, period = 14) {
   const trs = [];
   for (let i = 1; i < candles.length; i++) {
@@ -238,7 +261,6 @@ function calcATR(candles, period = 14) {
   return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
 }
 
-// 8. EMA (5, 10, 20, 50)
 function calcEMA(candles, period) {
   if (candles.length < 2) return candles[0].close;
   const k = 2 / (period + 1);
@@ -247,7 +269,6 @@ function calcEMA(candles, period) {
   return ema;
 }
 
-// 9. Stochastic RSI
 function calcStochRSI(candles, period = 14) {
   const rsiArr = [];
   for (let i = period; i < candles.length; i++)
@@ -259,7 +280,6 @@ function calcStochRSI(candles, period = 14) {
   return ((rsiArr[rsiArr.length - 1] - mn) / (mx - mn)) * 100;
 }
 
-// 10. CCI
 function calcCCI(candles, period = 20) {
   const p = Math.min(period, candles.length);
   const slice = candles.slice(-p);
@@ -270,7 +290,6 @@ function calcCCI(candles, period = 20) {
   return (typicals[typicals.length - 1] - mean) / (0.015 * mad);
 }
 
-// 11. Williams %R
 function calcWilliamsR(candles, period = 14) {
   const p = Math.min(period, candles.length);
   const slice = candles.slice(-p);
@@ -281,7 +300,6 @@ function calcWilliamsR(candles, period = 14) {
   return ((highest - last) / (highest - lowest)) * -100;
 }
 
-// 12. Ichimoku Cloud
 function calcIchimoku(candles) {
   const len = candles.length;
   if (len < 52) return { trend: 'NEUTRAL', up: 0, dn: 0 };
@@ -305,7 +323,6 @@ function calcIchimoku(candles) {
   return { trend: up > dn ? 'UP' : 'DOWN', up, dn };
 }
 
-// 13. MFI (Money Flow Index)
 function calcMFI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
   let positiveFlow = 0, negativeFlow = 0;
@@ -322,7 +339,6 @@ function calcMFI(candles, period = 14) {
   return 100 - (100 / (1 + (positiveFlow / (negativeFlow || 1))));
 }
 
-// 14. Fibonacci Retracement
 function calcFibonacci(candles) {
   const len = Math.min(50, candles.length);
   const slice = candles.slice(-len);
@@ -336,7 +352,6 @@ function calcFibonacci(candles) {
   return { near618, above618, dir: above618 ? 'UP' : 'DOWN' };
 }
 
-// 15. Chaikin Money Flow
 function calcChaikinMF(candles, period = 21) {
   if (candles.length < period) return 0;
   let sumMF = 0;
@@ -349,7 +364,6 @@ function calcChaikinMF(candles, period = 21) {
   return totalVol > 0 ? sumMF / totalVol : 0;
 }
 
-// 16. Parabolic SAR
 function calcParabolicSAR(candles) {
   const last = candles[candles.length - 1];
   const prev = candles[candles.length - 2] || last;
@@ -357,7 +371,6 @@ function calcParabolicSAR(candles) {
   return { dir: isUptrend ? 'UP' : 'DOWN' };
 }
 
-// 17. OBV (On-Balance Volume)
 function calcOBV(candles) {
   let obv = 0;
   for (let i = 1; i < candles.length; i++) {
@@ -369,7 +382,6 @@ function calcOBV(candles) {
   return { dir: lastOBV > prevOBV ? 'UP' : 'DOWN' };
 }
 
-// 18. Candle Patterns
 function calcCandlePattern(candles) {
   const len = candles.length;
   if (len < 3) return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
@@ -393,7 +405,6 @@ function calcCandlePattern(candles) {
   return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
 }
 
-// 19. Support & Resistance
 function calcSR(candles) {
   const highs = candles.slice(-20).map(c => c.high);
   const lows = candles.slice(-20).map(c => c.low);
@@ -406,7 +417,6 @@ function calcSR(candles) {
   };
 }
 
-// 20. Trend Strength (Composite)
 function calcTrendStrength(candles) {
   const ema5 = calcEMA(candles, 5);
   const ema10 = calcEMA(candles, 10);
@@ -459,7 +469,6 @@ async function smartAnalyze(pair, forceOTC = false) {
   const atr = calcATR(candles1m);
   const volatility = (atr / last) * 100;
 
-  // ━━ Calculate all 20 indicators ━━
   const rsi = calcRSI(candles1m);
   const macd = calcMACD(candles1m);
   const adx = calcADX(candles1m);
@@ -482,106 +491,84 @@ async function smartAnalyze(pair, forceOTC = false) {
   let up = 0, dn = 0;
   const signals = [];
 
-  // ━━ 1. RSI ━━
   if (rsi < 30) { up += 3; signals.push('RSI Oversold'); }
   else if (rsi > 70) { dn += 3; signals.push('RSI Overbought'); }
 
-  // ━━ 2. MACD ━━
   if (macd > 0) { up += 3; signals.push('MACD Bullish'); }
   else { dn += 3; signals.push('MACD Bearish'); }
 
-  // ━━ 3. ADX ━━
   if (adx.adx >= 25) {
     if (adx.plusDI > adx.minusDI) { up += 3; signals.push(`ADX Strong ✅`); }
     else { dn += 3; signals.push(`ADX Strong ✅`); }
   }
 
-  // ━━ 4. Bollinger Bands ━━
   if (last <= bb.lower) { up += 3; signals.push('At Lower BB'); }
   else if (last >= bb.upper) { dn += 3; signals.push('At Upper BB'); }
 
-  // ━━ 5. Supertrend ━━
   if (supertrend.dir === 'UP') { up += 3; signals.push('Supertrend Bullish'); }
   else if (supertrend.dir === 'DOWN') { dn += 3; signals.push('Supertrend Bearish'); }
 
-  // ━━ 6. VWAP ━━
   if (vwap.dir === 'UP') { up += 2; signals.push('Above VWAP'); }
   else { dn += 2; signals.push('Below VWAP'); }
 
-  // ━━ 7. StochRSI ━━
   if (stoch < 20) { up += 2; signals.push('StochRSI Oversold'); }
   else if (stoch > 80) { dn += 2; signals.push('StochRSI Overbought'); }
 
-  // ━━ 8. CCI ━━
   if (cci < -100) { up += 2; signals.push('CCI Oversold'); }
   else if (cci > 100) { dn += 2; signals.push('CCI Overbought'); }
 
-  // ━━ 9. Williams %R ━━
   if (wr < -80) { up += 2; signals.push('Williams Oversold'); }
   else if (wr > -20) { dn += 2; signals.push('Williams Overbought'); }
 
-  // ━━ 10. Ichimoku ━━
   if (ichimoku.trend === 'UP') { up += 3; signals.push('Ichimoku Bullish'); }
   else if (ichimoku.trend === 'DOWN') { dn += 3; signals.push('Ichimoku Bearish'); }
 
-  // ━━ 11. MFI ━━
   if (mfi < 20) { up += 3; signals.push('MFI Oversold'); }
   else if (mfi > 80) { dn += 3; signals.push('MFI Overbought'); }
 
-  // ━━ 12. Fibonacci ━━
   if (fib.near618) {
     if (fib.above618) { up += 3; signals.push('Fib 61.8% Support'); }
     else { dn += 3; signals.push('Fib 61.8% Resistance'); }
   }
 
-  // ━━ 13. Chaikin MF ━━
   if (cmf > 0.1) { up += 2; signals.push('CMF Bullish'); }
   else if (cmf < -0.1) { dn += 2; signals.push('CMF Bearish'); }
 
-  // ━━ 14. Parabolic SAR ━━
   if (psar.dir === 'UP') { up += 2; signals.push('PSAR Bullish'); }
   else { dn += 2; signals.push('PSAR Bearish'); }
 
-  // ━━ 15. OBV ━━
   if (obv.dir === 'UP') { up += 2; signals.push('OBV Bullish'); }
   else { dn += 2; signals.push('OBV Bearish'); }
 
-  // ━━ 16. Candle Pattern ━━
   if (cp.dir === 'UP') { up += cp.str; signals.push(cp.pattern); }
   else if (cp.dir === 'DOWN') { dn += cp.str; signals.push(cp.pattern); }
 
-  // ━━ 17. Support/Resistance ━━
   if (sr.nearSupport) { up += 3; signals.push('At Support'); }
   if (sr.nearResistance) { dn += 3; signals.push('At Resistance'); }
 
-  // ━━ 18-20. Trend + Volatility ━━
   up += trend.up; dn += trend.dn;
   if (trend.dir === 'UP') signals.push('Strong Trend UP');
   else signals.push('Strong Trend DOWN');
 
-  // ━━ Final Score ━━
   const total = up + dn;
   const dominant = Math.max(up, dn);
   const ratio = total > 0 ? dominant / total : 0;
   const direction = up >= dn ? 'UP' : 'DOWN';
   const aiScore = Math.round(ratio * 100);
 
-  // ━━ Confidence ━━
   let confidence;
   if (aiScore >= 85) confidence = 'Very High 🔥';
   else if (aiScore >= 75) confidence = 'High 🟢';
   else if (aiScore >= 65) confidence = 'Medium ⚡';
   else confidence = 'Low ⚠️';
 
-  // ━━ Multi-TF & Validity ━━
   const tf5m = analyzeTimeframe(candles5m);
-  
+
   if (aiScore < 65 || volatility < 0.002 || !trend.isStrong) {
     console.log((isLive ? pair.live : pair.otc) + ` | Score ${aiScore}% — skip`);
     return null;
   }
 
-  // ━━ Agreement Check ━━
   const directionsAgree = [
     trend.dir,
     ichimoku.trend,
@@ -610,7 +597,8 @@ async function smartAnalyze(pair, forceOTC = false) {
     avgRatio: ratio,
     isLive,
     directionsAgree,
-    adx: adx.adx
+    adx: adx.adx,
+    currentPrice: last   // ✅ নতুন — win/loss চেকের জন্য entry price হিসেবে ব্যবহার হবে
   };
 }
 
@@ -622,7 +610,6 @@ function buildSignalMessage(best, entry, expiry) {
   const dirLabel = best.direction === 'UP' ? '🟢 𝗕𝗨𝗬' : '🔴 𝗦𝗘𝗟𝗟';
   const dirEmoji = best.direction === 'UP' ? '⏫' : '⏬';
   const confidenceLabel = best.aiScore >= 85 ? '𝗩𝗲𝗿𝘆 𝗛𝗶𝗴𝗵 🔥' : '𝗛𝗶𝗴𝗵 🟢';
-  const bdTime = getBDTime();
 
   return (
     `╔════════════════════╗\n` +
@@ -637,6 +624,52 @@ function buildSignalMessage(best, entry, expiry) {
     `⚠️ 𝗠𝗮𝘅 𝟭 𝗦𝘁𝗲𝗽 𝗠𝗧𝗚\n` +
     `🤖 𝗣𝗼𝘄𝗲𝗿𝗲𝗱 𝗯𝘆 𝗤𝗫 𝗔𝗜`
   );
+}
+
+// ✅ নতুন — ডেইলি রিপোর্ট মেসেজ বিল্ডার
+function buildDailyReport() {
+  const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentDateKey());
+  const { total, wins, losses } = dailyStats;
+  const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
+
+  return (
+    `🏆 ${toBoldSans('QX AI DAILY REPORT')}\n\n` +
+    `📅 ${toBoldSans('DATE')}         ➜ ${toBoldSans(dateStr)}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `📊 ${toBoldSans('TOTAL SIGNALS')} ➜ ${toBoldSans(String(total))}\n` +
+    `🟢 ${toBoldSans('TOTAL WINS')}    ➜ ${toBoldSans(String(wins))}\n` +
+    `🔴 ${toBoldSans('TOTAL LOSSES')}  ➜ ${toBoldSans(String(losses))}\n` +
+    `📈 ${toBoldSans('WIN RATE')}      ➜ ${toBoldSans(winRate + '%')}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `🙏 ${toBoldSans('Thank You for Trading With Us!')}\n\n` +
+    `💬 ${toBoldSans('FEEDBACK')} ➜ @AkiL_xD\n` +
+    `🚀 ${toBoldSans('QX AI V5.0')}`
+  );
+}
+
+// ✅ নতুন — সিগন্যাল পাঠানোর পর ব্যাকগ্রাউন্ডে win/loss যাচাই (মূল ফ্লো ব্লক করে না)
+async function checkSignalResult(signal) {
+  await new Promise(r => setTimeout(r, 70 * 1000)); // ~1 মিনিট এক্সপায়ারি + বাফার
+
+  try {
+    const symbol = signal.pair.replace(' OTC', ''); // TwelveData তে সবসময় লাইভ সিম্বল ফরম্যাটই ব্যবহৃত হয়
+    const freshCandles = await getCandles(symbol);
+    const exitPrice = freshCandles[freshCandles.length - 1].close;
+    const isWin = signal.direction === 'UP' ? exitPrice > signal.currentPrice : exitPrice < signal.currentPrice;
+
+    // যদি দিনের মাঝপথে dateKey পরিবর্তন হয়ে যায় (নিরাপত্তার জন্য)
+    const nowKey = currentDateKey();
+    if (dailyStats.dateKey !== nowKey) {
+      dailyStats = { dateKey: nowKey, total: 0, wins: 0, losses: 0 };
+    }
+
+    dailyStats.total++;
+    if (isWin) dailyStats.wins++; else dailyStats.losses++;
+
+    console.log(`📊 Result: ${signal.pair} | ${signal.direction} | Entry:${signal.currentPrice} Exit:${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+  } catch (e) {
+    console.log('⚠️ Could not verify result for', signal.pair, '-', e.message);
+  }
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -669,7 +702,7 @@ function analyzeTimeframe(candles) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 module.exports = function(bot, newsModule) {
-  console.log('✅ Qx AI Predictor VIP v5.0 — 20 High Accuracy Indicators started!');
+  console.log('✅ Qx AI Predictor VIP v5.1 — 20 Indicators + Daily Report started!');
 
   async function run() {
     if (newsModule && newsModule.isNewsActive()) {
@@ -677,8 +710,22 @@ module.exports = function(bot, newsModule) {
       return;
     }
 
+    // ✅ নতুন — মধ্যরাতে ডেইলি রিপোর্ট (isRolloverTime চেকের আগে বসাতে হবে, নাহলে স্কিপ হয়ে যাবে)
+    const bdNow = getBDTime();
+    const dateKeyNow = currentDateKey();
+    if (bdNow.hour === 0 && bdNow.minute >= 5 && bdNow.minute <= 9 && reportSentDateKey !== dateKeyNow) {
+      reportSentDateKey = dateKeyNow;
+      try {
+        await bot.sendMessage(CHANNEL_ID, buildDailyReport(), { parse_mode: 'Markdown' });
+        console.log('📊 Daily report sent for', dailyStats.dateKey);
+      } catch (e) {
+        console.log('Daily report send error:', e.message);
+      }
+      dailyStats = { dateKey: dateKeyNow, total: 0, wins: 0, losses: 0 };
+    }
+
     if (isRolloverTime()) {
-      console.log('⏸ Rollover — skip');
+      console.log('⏸ Rollover/Report window — skip');
       return;
     }
 
@@ -710,7 +757,6 @@ module.exports = function(bot, newsModule) {
       }
     }
 
-    // Market Status
     if (anyLive) { liveCount++; noLiveCount = 0; }
     else { noLiveCount++; liveCount = 0; }
 
@@ -766,6 +812,13 @@ module.exports = function(bot, newsModule) {
       lastSentTime = Date.now();
       lastSignalKey = signalKey;
       console.log(`✅ Signal: ${best.pair} | ${best.aiScore}% | ${best.confidence} | ${best.isLive ? 'LIVE 🟢' : 'OTC 🔴'} | Agree: ${best.directionsAgree}/7`);
+
+      // ✅ শুধু Live (real market) সিগন্যালই ডেইলি স্ট্যাটসে কাউন্ট হবে, OTC বাদ
+      if (best.isLive) {
+        checkSignalResult(best).catch(e => console.log('Result check error:', e.message));
+      } else {
+        console.log('📊 OTC signal — not counted in daily stats');
+      }
     } catch (e) {
       console.log('Send error: ' + e.message);
     }
