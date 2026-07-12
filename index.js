@@ -493,21 +493,23 @@ bot.onText(/\/start/, async (msg) => {
       '🎁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹\n' +
       '📈 𝗦𝗶𝗴𝗻𝗮𝗹𝘀 𝗟𝗲𝗳𝘁: 0' + signalLeft + '/0' + FREE_TRIAL_SIGNAL + '\n' +
       '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: 0' + screenshotLeft + '/0' + FREE_TRIAL_SCREENSHOT + '\n\n' +
-      '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 🚀\n\n' +
-      '╰━━━━━━━━━━━━━━━━━━━━╯\n\n' +
+      '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗬𝗼𝘂𝗿 𝗔𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝗨𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀 🚀',
+      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
+    );
+    await bot.sendMessage(chatId,
       '🚀 𝗦𝘁𝗮𝗿𝘁 𝗬𝗼𝘂𝗿 𝗔𝗻𝗮𝗹𝘆𝘀𝗶𝘀\n\n' +
       '📊 𝗖𝗵𝗼𝗼𝘀𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗣𝗮𝗶𝗿 (𝗢𝗧𝗖)\n' +
       '📸 𝗢𝗿 𝗨𝗽𝗹𝗼𝗮𝗱 𝗮 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 👇',
-      { parse_mode: 'Markdown', reply_markup: trialKeyboard }
-    );
-    await bot.sendMessage(chatId, '👇 নিচের বাটনগুলো থেকে বেছে নিন:', {
-      reply_markup: {
-        inline_keyboard: [
-          [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
-          [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
-        ]
+      {
+        parse_mode: 'Markdown',
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗡𝗲𝘄 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊', callback_data: 'new_signal' }],
+            [{ text: '📸 𝗔𝗻𝗮𝗹𝘆𝘇𝗲 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁', callback_data: 'screenshot_analysis' }]
+          ]
+        }
       }
-    });
+    );
     return;
   }
 
