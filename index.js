@@ -1367,8 +1367,16 @@ const PORT = process.env.PORT || 3000;
 
 app.get('/postback', async (req, res) => {
   try {
-    const { status, uid, eid, cid, lid } = req.query;
+    const { status, uid, eid, cid, lid, token } = req.query;
     console.log('📩 Postback received:', req.query);
+
+    // 🛡️ SECURITY PATCH — সঠিক secret token ছাড়া postback রিজেক্ট করা হচ্ছে,
+    // যাতে কেউ ব্রাউজার/URL দিয়ে সরাসরি হিট করে fake affiliate-verify তৈরি করতে না পারে
+    if (token !== process.env.POSTBACK_SECRET) {
+      console.log('🚫 Postback রিজেক্ট হলো — ভুল বা মিসিং token');
+      res.status(403).send('Forbidden');
+      return;
+    }
 
     if (uid && db) {
       await db.collection('affiliateVerified').updateOne(
