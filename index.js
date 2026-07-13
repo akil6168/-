@@ -1,4 +1,4 @@
-// v22 - Free Trial + Direct Affiliate Verify + Real Candle-Based Result Tracking
+// v23 - Free Trial + Direct Affiliate Verify + Fixed Real Candle-Based Result Tracking
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
@@ -84,7 +84,6 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 let dailyStats = { dateKey: null, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
 const userDailyStats = new Map();
 let lastReportDateKey = null;
-let resultRestActive = false;
 
 function currentBDDateKey() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
@@ -130,7 +129,6 @@ function getUserStats(userId) {
   return userDailyStats.get(userId);
 }
 
-// ✅ পরিবর্তিত — Win Rate যোগ করা হয়েছে
 function buildDailyAdminReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentBDDateKey());
   const totalCompleted = dailyStats.directWin + dailyStats.mtgWin + dailyStats.loss;
@@ -168,22 +166,25 @@ function buildDailyAdminReport() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ নতুন — Real Candle-Based Result Tracking (getCurrentPrice/live price ব্যবহার হয় না)
+// ✅ FIXED — Real Candle-Based Result Tracking
+// মূল fix: candle খোঁজা শুরুর আগে candle close (+buffer) পর্যন্ত wait করা হয়,
+// তারপর একবারেই fetch/retry করে সেই একই candle থেকে open ও close দুটোই নেওয়া হয়।
+// আগে candle close হওয়ার আগেই fetch attempt শুরু হতো, ফলে retry window নষ্ট হয়ে
+// অনেক signal-এর result silently miss হয়ে যেত। এখন retry window পুরোটাই
+// candle close হওয়ার *পরে* কাজে লাগে।
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// UTC datetime string বানানো — TwelveData candle.datetime এর ফরম্যাটের সাথে মিলিয়ে ("YYYY-MM-DD HH:MM:00")
 function formatUTCDateTime(d) {
   const pad = n => String(n).padStart(2, '0');
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
 }
 
-// TwelveData datetime string কে UTC Date এ পার্স করা (session.js এ যেভাবে করা হয়েছে সেই একই কনভেনশন)
 function parseUTCDatetimeStr(str) {
   return new Date(str + ' UTC');
 }
 
-// একটা নির্দিষ্ট entry-minute এর candle exact datetime ম্যাচ করে খুঁজে বের করা — "latest candle" blindly নেওয়া হচ্ছে না
-async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 6, intervalMs = 5000) {
+// candle close হওয়ার পর এটা কল করা হয় — তাই এখন attempts/interval বাড়ানো নিরাপদ ও কার্যকর
+async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 10, intervalMs = 6000) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const candles = await getCandles(symbol);
@@ -205,7 +206,6 @@ async function saveSignalRecord(record) {
   }
 }
 
-// entryDatetimeStr — UTC candle datetime ("YYYY-MM-DD HH:MM:00"), entryDisplayTime — BD টাইম যেটা ইউজারকে দেখানো হয়েছিল
 async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, entryDisplayTime) {
   if (!isRealMarketOpen()) return;
 
@@ -214,27 +214,25 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
   dailyStats.totalSignals++;
 
   try {
-    // ━━━ ধাপ ১ — Entry minute এর candle খুঁজে তার OPEN price নেওয়া (exact datetime match) ━━━
+    const entryDate = parseUTCDatetimeStr(entryDatetimeStr);
+
+    // ━━━ ধাপ ১ — Entry candle সম্পূর্ণ close হওয়া পর্যন্ত অপেক্ষা (close + 5s buffer) ━━━
+    const waitUntilEntryClose = entryDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilEntryClose > 0) await sleep(waitUntilEntryClose);
+    if (!isRealMarketOpen()) return;
+
+    // ━━━ ধাপ ২ — Close হওয়ার পর ফাইনাল candle fetch (open ও close একসাথে পাওয়া যায়) ━━━
     const entryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr);
     if (!entryCandle) {
       console.log(`⚠️ Entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
+      saveSignalRecord({
+        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: null,
+        directResult: null, mtgResult: null, finalResult: 'UNKNOWN', createdAt: new Date()
+      });
       return;
     }
     const entryOpen = entryCandle.open;
-
-    // ━━━ ধাপ ২ — এই candle বন্ধ (close) হওয়া পর্যন্ত অপেক্ষা করা ━━━
-    const entryDate = parseUTCDatetimeStr(entryDatetimeStr);
-    const waitUntilClose = entryDate.getTime() + 65 * 1000 - Date.now();
-    if (waitUntilClose > 0) await sleep(waitUntilClose);
-    if (!isRealMarketOpen()) return;
-
-    // ━━━ ধাপ ৩ — একই candle এর CLOSE price নেওয়া (নতুন live price না) ━━━
-    const closedEntryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr, 6, 5000);
-    if (!closedEntryCandle) {
-      console.log(`⚠️ Closed entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
-      return;
-    }
-    const entryClose = closedEntryCandle.close;
+    const entryClose = entryCandle.close;
 
     const isDirectWin = direction === 'UP⏫' ? entryClose > entryOpen : entryClose < entryOpen;
 
@@ -249,12 +247,18 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
       return;
     }
 
-    // ━━━ ধাপ ৪ — Direct Loss হলে silent MTG (কোনো user notification নেই) ━━━
+    // ━━━ ধাপ ৩ — Direct Loss হলে silent MTG (কোনো user notification নেই) ━━━
     console.log(`⚠️ Direct Loss (silent) — MTG শুরু হচ্ছে: user ${userId} | ${symbol}`);
 
     const mtgDate = new Date(entryDate.getTime() + 60 * 1000);
     const mtgDatetimeStr = formatUTCDateTime(mtgDate);
 
+    // ━━━ ধাপ ৪ — MTG candle সম্পূর্ণ close হওয়া পর্যন্ত অপেক্ষা ━━━
+    const waitUntilMtgClose = mtgDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilMtgClose > 0) await sleep(waitUntilMtgClose);
+    if (!isRealMarketOpen()) return;
+
+    // ━━━ ধাপ ৫ — Close হওয়ার পর ফাইনাল MTG candle fetch ━━━
     const mtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr);
     if (!mtgCandle) {
       console.log(`⚠️ MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
@@ -265,19 +269,9 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
       return;
     }
     const mtgOpen = mtgCandle.open;
+    const mtgClose = mtgCandle.close;
 
-    const waitUntilMtgClose = mtgDate.getTime() + 65 * 1000 - Date.now();
-    if (waitUntilMtgClose > 0) await sleep(waitUntilMtgClose);
-    if (!isRealMarketOpen()) return;
-
-    const closedMtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr, 6, 5000);
-    if (!closedMtgCandle) {
-      console.log(`⚠️ Closed MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
-      return;
-    }
-    const mtgClose = closedMtgCandle.close;
-
-    // ━━━ ধাপ ৫ — MTG result (Max 1 MTG, এরপর final) ━━━
+    // ━━━ ধাপ ৬ — MTG result (Max 1 MTG, এরপর final) ━━━
     const isMtgWin = direction === 'UP⏫' ? mtgClose > mtgOpen : mtgClose < mtgOpen;
 
     if (isMtgWin) {
@@ -440,7 +434,6 @@ function symbolFromDisplayPair(displayPair) {
   return displayPair.replace(' OTC', '');
 }
 
-// ✅ পরিবর্তিত — datetime field যোগ করা হয়েছে (candle-exact matching এর জন্য দরকার)
 async function getCandles(symbol) {
   const data = await twelveData.getTimeSeries(symbol, '1min', 30);
   if (!data.values || data.values.length === 0) throw new Error('No candle data');
@@ -786,7 +779,7 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// /approve — এখনো manual override হিসেবে available (edge case handling)
+// /approve
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
@@ -855,7 +848,7 @@ bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   }
 });
 
-// /delaffiliate — affiliateVerified কালেকশন থেকে একটা traderId এন্ট্রি মুছে ফেলা (টেস্ট/ভুল এন্ট্রি cleanup এর জন্য)
+// /delaffiliate
 bot.onText(/\/delaffiliate (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const traderId = match[1].trim();
@@ -1021,9 +1014,6 @@ bot.on('message', async (msg) => {
 
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ পরিবর্তিত — সঠিক Trader ID হলে সরাসরি API key দিয়ে access, admin শুধু info notification পাবে
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   if (affRecord) {
     const apiKey = generateApiKey();
     passwordMode.set(userId, apiKey);
@@ -1041,9 +1031,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ পরিবর্তিত — ভুল/না-মেলা Trader ID হলে সরাসরি ইউজারকে জানানো, admin manual approve চাওয়া হয় না
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(chatId,
@@ -1104,12 +1091,11 @@ async function generateSignalForPair(chatId, userId, pair) {
       signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%', symbol: symbolFromDisplayPair(pair) };
     }
 
-    // ✅ পরিবর্তিত — entry মুহূর্ত এখন real-UTC minute হিসেবে হিসাব করা হচ্ছে, যাতে candle datetime এর সাথে exact match করা যায়
     const now2 = new Date();
-    const entryDate = new Date(Math.floor((now2.getTime() + 60000) / 60000) * 60000); // পরের full minute (real UTC)
+    const entryDate = new Date(Math.floor((now2.getTime() + 60000) / 60000) * 60000);
     const entryDatetimeStr = formatUTCDateTime(entryDate);
 
-    const bd2 = new Date(entryDate.getTime() + 6 * 60 * 60 * 1000); // শুধু display এর জন্য BD সময়ে দেখানো
+    const bd2 = new Date(entryDate.getTime() + 6 * 60 * 60 * 1000);
     const exH = String(bd2.getUTCHours()).padStart(2, '0');
     const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
     const entryDisplayTime = exH + ':' + exM;
@@ -1129,7 +1115,6 @@ async function generateSignalForPair(chatId, userId, pair) {
 
     if (sentMsg) lastSignalMsgId.set(userId, sentMsg.message_id);
 
-    // ✅ পরিবর্তিত — নতুন candle-based tracker, exact entry datetime সহ কল করা হচ্ছে
     trackSignalResult(userId, signal.symbol, signal.direction, entryDatetimeStr, entryDisplayTime)
       .catch(e => console.log('trackSignalResult error:', e.message));
   } catch (e) {
@@ -1395,8 +1380,6 @@ app.get('/postback', async (req, res) => {
     const { status, uid, eid, cid, lid, token } = req.query;
     console.log('📩 Postback received:', req.query);
 
-    // 🛡️ SECURITY PATCH — সঠিক secret token ছাড়া postback রিজেক্ট করা হচ্ছে,
-    // যাতে কেউ ব্রাউজার/URL দিয়ে সরাসরি হিট করে fake affiliate-verify তৈরি করতে না পারে
     if (token !== process.env.POSTBACK_SECRET) {
       console.log('🚫 Postback রিজেক্ট হলো — ভুল বা মিসিং token');
       res.status(403).send('Forbidden');
@@ -1428,7 +1411,7 @@ app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT
 connectDB().then(() => {
   sessionModule = require('./session');
   sessionModule(bot);
-  console.log('Bot running v22 - Direct Affiliate Verify + Real Candle-Based Result Tracking...');
+  console.log('Bot running v23 - Fixed Real Candle-Based Result Tracking...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
