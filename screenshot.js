@@ -1,7 +1,7 @@
 // screenshot.js - Maximum Deep Analysis + Chart Check
 const https = require('https');
+const geminiKeyPool = require('./geminikey');
 
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
@@ -76,7 +76,6 @@ function getEntryExpiry() {
 }
 
 // ✅ শুধু activeIndex পর্যন্ত step গুলো দেখাবে (pending/future step দেখাবে না)
-// আগের সব step ✅ (done), শেষেরটা 🔄 (running) থাকবে
 function buildProgressBlock(activeIndex) {
   const visibleSteps = progressSteps.slice(0, activeIndex + 1);
   return visibleSteps.map((label, idx) => {
@@ -101,8 +100,9 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// ✅ একটা মডেলে single attempt। রিটার্ন করে { ok, retryable, text }
-function callGeminiModel(model, imageBase64) {
+// ✅ একটা key + model দিয়ে single attempt
+// রিটার্ন করে { ok, quotaExceeded, retryable, text }
+function callGeminiModel(model, apiKey, imageBase64) {
   return new Promise((resolve) => {
     const body = JSON.stringify({
       contents: [{
@@ -233,7 +233,7 @@ REASON: (2 sentence detailed explanation)`
 
     const options = {
       hostname: 'generativelanguage.googleapis.com',
-      path: `/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -247,60 +247,89 @@ REASON: (2 sentence detailed explanation)`
       res.on('end', () => {
         const status = res.statusCode;
 
-        // ✅ overload / rate-limit / server error → retryable, model বদলানো বা আবার try করা যাবে
-        if (status === 503 || status === 429 || status >= 500) {
-          console.log(`GEMINI [${model}] RETRYABLE STATUS ${status}:`, data.slice(0, 300));
-          resolve({ ok: false, retryable: true, text: null });
+        // ✅ quota শেষ → এই key আজকের জন্য বাদ
+        if (status === 429) {
+          console.log(`GEMINI [${model}] key ...${apiKey.slice(-6)} QUOTA EXCEEDED (429)`);
+          resolve({ ok: false, quotaExceeded: true, retryable: true, text: null });
+          return;
+        }
+
+        // ✅ overload / server error → key ঠিক আছে, model/server সমস্যা
+        if (status === 503 || status >= 500) {
+          console.log(`GEMINI [${model}] key ...${apiKey.slice(-6)} RETRYABLE STATUS ${status}:`, data.slice(0, 200));
+          resolve({ ok: false, quotaExceeded: false, retryable: true, text: null });
           return;
         }
 
         try {
           const json = JSON.parse(data);
           if (!json.candidates || !json.candidates[0]) {
-            console.log(`GEMINI [${model}] NO CANDIDATES:`, data.slice(0, 300));
-            resolve({ ok: false, retryable: true, text: null });
+            console.log(`GEMINI [${model}] NO CANDIDATES:`, data.slice(0, 200));
+            resolve({ ok: false, quotaExceeded: false, retryable: true, text: null });
             return;
           }
           const text = json.candidates[0].content.parts[0].text;
-          console.log(`GEMINI [${model}] RAW:\n` + text);
-          resolve({ ok: true, retryable: false, text });
+          console.log(`GEMINI [${model}] key ...${apiKey.slice(-6)} RAW:\n` + text);
+          resolve({ ok: true, quotaExceeded: false, retryable: false, text });
         } catch (e) {
           console.log(`GEMINI [${model}] PARSE ERROR:`, e.message);
-          resolve({ ok: false, retryable: true, text: null });
+          resolve({ ok: false, quotaExceeded: false, retryable: true, text: null });
         }
       });
     });
 
     req.on('error', (e) => {
       console.log(`GEMINI [${model}] REQUEST ERROR:`, e.message);
-      resolve({ ok: false, retryable: true, text: null });
+      resolve({ ok: false, quotaExceeded: false, retryable: true, text: null });
     });
     req.write(body);
     req.end();
   });
 }
 
-// ✅ প্রতিটা মডেল একবার করে, তারপর পুরো লিস্ট আবার ২ বার retry (delay সহ)
-// অর্থাৎ overload হলে user কে error না দিয়ে নিজে থেকে সামলে নেবে
+// ✅ Multi-key + multi-model রোটেশন:
+// - প্রতিটা active key নিয়ে, প্রতিটা model try করবে
+// - quota (429) পেলে সেই key সাথে সাথে বাদ, পরের key তে চলে যাবে
+// - overload (503) পেলে সেই key দিয়েই পরের model try করবে
+// - এক round-এ সব key/model fail করলে ৩ সেকেন্ড wait করে আবার শুরু (মোট ২ round)
 async function analyzeChartWithGemini(imageBase64) {
-  const maxRounds = 2;          // পুরো model list কতবার আবার ঘুরে দেখবে
-  const delayBetweenRounds = 3000; // ms
+  const maxRounds = 2;
+  const delayBetweenRounds = 3000;
+
+  if (geminiKeyPool.totalKeys === 0) {
+    throw new Error('No Gemini API keys configured in Railway Variables');
+  }
 
   for (let round = 0; round < maxRounds; round++) {
-    for (const model of GEMINI_MODELS) {
-      const result = await callGeminiModel(model, imageBase64);
-      if (result.ok) {
-        return result.text;
+    const triedKeys = [];
+
+    while (true) {
+      const apiKey = geminiKeyPool.getNextActiveKey(triedKeys);
+      if (!apiKey) break; // এই round-এ সব key শেষ (exhausted বা try করা হয়ে গেছে)
+
+      triedKeys.push(apiKey);
+
+      for (const model of GEMINI_MODELS) {
+        const result = await callGeminiModel(model, apiKey, imageBase64);
+
+        if (result.ok) {
+          return result.text;
+        }
+
+        if (result.quotaExceeded) {
+          geminiKeyPool.markExhausted(apiKey);
+          break; // এই key দিয়ে আর model try করার দরকার নেই
+        }
+        // retryable (503 ইত্যাদি) হলে এই key দিয়েই পরের model try হবে
       }
-      // retryable হলে সাথে সাথেই পরের মডেল try করবে (delay ছাড়া)
     }
-    // সব মডেল এই round-এ fail করলে একটু wait করে আবার পুরো লিস্ট try করবে
+
     if (round < maxRounds - 1) {
       await sleep(delayBetweenRounds);
     }
   }
 
-  throw new Error('All Gemini models unavailable after retries (503/overload)');
+  throw new Error('All Gemini keys/models unavailable after retries');
 }
 
 function parseGeminiResponse(text) {
@@ -398,9 +427,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ প্রতি সেকেন্ডে countdown আপডেট হবে (real per-second tick)
-    // step change হবে waitSeconds কে ৪ ভাগে ভাগ করে - প্রতি ভাগ শেষে
-    // নতুন step নিচে যোগ হবে, আগেরগুলো ✅ হয়ে থেকে যাবে
+    // ✅ প্রতি সেকেন্ডে countdown আপডেট, step একটা একটা করে যোগ হবে
     const stepDuration = Math.max(1, Math.floor(waitSeconds / progressSteps.length));
     let elapsedSeconds = 0;
 
@@ -408,7 +435,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       elapsedSeconds++;
       remaining = Math.max(0, waitSeconds - elapsedSeconds);
 
-      // এই সেকেন্ডে পরের step-এ যাওয়ার সময় হলে index বাড়বে
       const targetIndex = Math.min(
         progressSteps.length - 1,
         Math.floor(elapsedSeconds / stepDuration)
@@ -427,7 +453,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       if (remaining <= 0) {
         clearInterval(tickInterval);
       }
-    }, 1000); // ✅ প্রতি ১ সেকেন্ডে একবার
+    }, 1000);
 
     try {
       const photos = msg.photo;
@@ -502,7 +528,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         '━━━━━━━━━━━━━━━━\n\n' +
         '🎯 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ' + signal.confidence + ' ' + confEmoji + ' (' + signal.winRate + ')\n' +
         '📊 𝗧𝗥𝗘𝗡𝗗 ➜ ' + signal.trend + '\n\n' +
-        '🧠 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦 𝗩𝗜𝗘𝗪\n' +
+        '💡 𝗔𝗜 𝗩𝗜𝗘𝗪\n' +
         signal.reason + '\n\n' +
         '━━━━━━━━━━━━━━━━\n\n' +
         '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: *' + remainingCount + '/5*\n\n' +
@@ -520,7 +546,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       clearInterval(tickInterval);
       console.log('ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
-      // ✅ পরিবর্তিত — error catch মেসেজ
       await bot.sendMessage(chatId,
         '⚠️ 𝗢𝗼𝗽𝘀! 𝗦𝗼𝗿𝗿𝘆 𝘀𝗼𝗺𝗲𝘁𝗵𝗶𝗻𝗴 𝘄𝗲𝗻𝘁 𝘄𝗿𝗼𝗻𝗴 𝘄𝗵𝗶𝗹𝗲 𝗮𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝘁𝗵𝗲 𝗰𝗵𝗮𝗿𝘁.\n\n' +
         '🔄 𝗣𝗹𝗲𝗮𝘀𝗲 𝘁𝗿𝘆 𝗮𝗴𝗮𝗶𝗻 𝗶𝗻 𝗮 𝗳𝗲𝘄 𝘀𝗲𝗰𝗼𝗻𝗱𝘀.\n\n' +
