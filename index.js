@@ -1,4 +1,4 @@
-// v21 - Free Trial + Affiliate Postback + Market-Aware Pairs + Result Tracking + Daily Admin Report
+// v22 - Free Trial + Direct Affiliate Verify + Real Candle-Based Result Tracking
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
@@ -74,6 +74,8 @@ function mentionUser(userId, username, firstName) {
   return '[' + safeName + '](tg://user?id=' + userId + ')';
 }
 
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // ✅ Daily result-tracking state (per-user + global)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -127,8 +129,12 @@ function getUserStats(userId) {
   return userDailyStats.get(userId);
 }
 
+// ✅ পরিবর্তিত — Win Rate যোগ করা হয়েছে
 function buildDailyAdminReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentBDDateKey());
+  const totalCompleted = dailyStats.directWin + dailyStats.mtgWin + dailyStats.loss;
+  const winRate = totalCompleted > 0 ? (((dailyStats.directWin + dailyStats.mtgWin) / totalCompleted) * 100).toFixed(1) : '0.0';
+
   const sortedUsers = [...userDailyStats.entries()]
     .map(([uid, stats]) => ({ uid, ...stats, total: stats.directWin + stats.mtgWin + stats.loss }))
     .sort((a, b) => b.total - a.total);
@@ -148,10 +154,11 @@ function buildDailyAdminReport() {
     `📊 *𝗗𝗔𝗜𝗟𝗬 𝗔𝗗𝗠𝗜𝗡 𝗥𝗘𝗣𝗢𝗥𝗧*\n\n` +
     `📅 ${dateStr}\n` +
     `👥 *Active:* ${dailyStats.activeUsers.size}\n` +
-    `📊 *Signals:* ${dailyStats.totalSignals}\n\n` +
+    `📊 *Total Signals:* ${dailyStats.totalSignals}\n\n` +
     `🟢 *Direct Win:* ${dailyStats.directWin}\n` +
     `🟡 *MTG Win:* ${dailyStats.mtgWin}\n` +
-    `🔴 *Loss:* ${dailyStats.loss}\n\n` +
+    `🔴 *Loss:* ${dailyStats.loss}\n` +
+    `🎯 *Win Rate:* ${winRate}%\n\n` +
     `━━━━━━━━━━━━━━━━\n\n` +
     `🏆 *Top Active Users*\n\n` +
     topText +
@@ -159,7 +166,46 @@ function buildDailyAdminReport() {
   );
 }
 
-async function trackSignalResult(userId, symbol, direction) {
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ✅ নতুন — Real Candle-Based Result Tracking (getCurrentPrice/live price ব্যবহার হয় না)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// UTC datetime string বানানো — TwelveData candle.datetime এর ফরম্যাটের সাথে মিলিয়ে ("YYYY-MM-DD HH:MM:00")
+function formatUTCDateTime(d) {
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:00`;
+}
+
+// TwelveData datetime string কে UTC Date এ পার্স করা (session.js এ যেভাবে করা হয়েছে সেই একই কনভেনশন)
+function parseUTCDatetimeStr(str) {
+  return new Date(str + ' UTC');
+}
+
+// একটা নির্দিষ্ট entry-minute এর candle exact datetime ম্যাচ করে খুঁজে বের করা — "latest candle" blindly নেওয়া হচ্ছে না
+async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 6, intervalMs = 5000) {
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const candles = await getCandles(symbol);
+      const match = candles.find(c => c.datetime === targetDatetimeStr);
+      if (match) return match;
+    } catch (e) {
+      console.log('waitForCandleByDatetime fetch error:', e.message);
+    }
+    await sleep(intervalMs);
+  }
+  return null;
+}
+
+async function saveSignalRecord(record) {
+  try {
+    if (db) await db.collection('signalResults').insertOne(record);
+  } catch (e) {
+    console.log('saveSignalRecord error:', e.message);
+  }
+}
+
+// entryDatetimeStr — UTC candle datetime ("YYYY-MM-DD HH:MM:00"), entryDisplayTime — BD টাইম যেটা ইউজারকে দেখানো হয়েছিল
+async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, entryDisplayTime) {
   if (!isRealMarketOpen()) return;
 
   ensureDailyStatsFresh();
@@ -167,43 +213,88 @@ async function trackSignalResult(userId, symbol, direction) {
   dailyStats.totalSignals++;
 
   try {
-    const openCandles1 = await getCandles(symbol);
-    const openPrice1 = openCandles1[openCandles1.length - 1].close;
+    // ━━━ ধাপ ১ — Entry minute এর candle খুঁজে তার OPEN price নেওয়া (exact datetime match) ━━━
+    const entryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr);
+    if (!entryCandle) {
+      console.log(`⚠️ Entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
+      return;
+    }
+    const entryOpen = entryCandle.open;
 
-    await new Promise(r => setTimeout(r, 65 * 1000));
+    // ━━━ ধাপ ২ — এই candle বন্ধ (close) হওয়া পর্যন্ত অপেক্ষা করা ━━━
+    const entryDate = parseUTCDatetimeStr(entryDatetimeStr);
+    const waitUntilClose = entryDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilClose > 0) await sleep(waitUntilClose);
     if (!isRealMarketOpen()) return;
 
-    const closeCandles1 = await getCandles(symbol);
-    const closePrice1 = closeCandles1[closeCandles1.length - 1].close;
+    // ━━━ ধাপ ৩ — একই candle এর CLOSE price নেওয়া (নতুন live price না) ━━━
+    const closedEntryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr, 6, 5000);
+    if (!closedEntryCandle) {
+      console.log(`⚠️ Closed entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
+      return;
+    }
+    const entryClose = closedEntryCandle.close;
 
-    const isDirectWin = direction === 'UP⏫' ? closePrice1 > openPrice1 : closePrice1 < openPrice1;
+    const isDirectWin = direction === 'UP⏫' ? entryClose > entryOpen : entryClose < entryOpen;
 
     if (isDirectWin) {
       dailyStats.directWin++;
       getUserStats(userId).directWin++;
-      console.log(`✅ Direct Win: user ${userId} | ${symbol} | Open:${openPrice1} Close:${closePrice1}`);
+      console.log(`✅ Direct Win: user ${userId} | ${symbol} | Open:${entryOpen} Close:${entryClose}`);
+      saveSignalRecord({
+        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: entryOpen,
+        directResult: 'WIN', mtgResult: null, finalResult: 'DIRECT_WIN', createdAt: new Date()
+      });
       return;
     }
 
-    console.log(`⚠️ Direct Loss — checking MTG for user ${userId} | ${symbol}`);
-    const openPrice2 = closePrice1;
+    // ━━━ ধাপ ৪ — Direct Loss হলে silent MTG (কোনো user notification নেই) ━━━
+    console.log(`⚠️ Direct Loss (silent) — MTG শুরু হচ্ছে: user ${userId} | ${symbol}`);
 
-    await new Promise(r => setTimeout(r, 65 * 1000));
+    const mtgDate = new Date(entryDate.getTime() + 60 * 1000);
+    const mtgDatetimeStr = formatUTCDateTime(mtgDate);
+
+    const mtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr);
+    if (!mtgCandle) {
+      console.log(`⚠️ MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
+      saveSignalRecord({
+        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: entryOpen,
+        directResult: 'LOSS', mtgResult: null, finalResult: 'UNKNOWN', createdAt: new Date()
+      });
+      return;
+    }
+    const mtgOpen = mtgCandle.open;
+
+    const waitUntilMtgClose = mtgDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilMtgClose > 0) await sleep(waitUntilMtgClose);
     if (!isRealMarketOpen()) return;
 
-    const closeCandles2 = await getCandles(symbol);
-    const closePrice2 = closeCandles2[closeCandles2.length - 1].close;
+    const closedMtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr, 6, 5000);
+    if (!closedMtgCandle) {
+      console.log(`⚠️ Closed MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
+      return;
+    }
+    const mtgClose = closedMtgCandle.close;
 
-    const isMtgWin = direction === 'UP⏫' ? closePrice2 > openPrice2 : closePrice2 < openPrice2;
+    // ━━━ ধাপ ৫ — MTG result (Max 1 MTG, এরপর final) ━━━
+    const isMtgWin = direction === 'UP⏫' ? mtgClose > mtgOpen : mtgClose < mtgOpen;
 
     if (isMtgWin) {
       dailyStats.mtgWin++;
       getUserStats(userId).mtgWin++;
-      console.log(`🟡 MTG Win: user ${userId} | ${symbol} | Open:${openPrice2} Close:${closePrice2}`);
+      console.log(`🟡 MTG Win: user ${userId} | ${symbol} | Open:${mtgOpen} Close:${mtgClose}`);
+      saveSignalRecord({
+        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: entryOpen,
+        directResult: 'LOSS', mtgResult: 'WIN', finalResult: 'MTG_WIN', createdAt: new Date()
+      });
     } else {
       dailyStats.loss++;
       getUserStats(userId).loss++;
       console.log(`🔴 Final Loss: user ${userId} | ${symbol}`);
+      saveSignalRecord({
+        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: entryOpen,
+        directResult: 'LOSS', mtgResult: 'LOSS', finalResult: 'FINAL_LOSS', createdAt: new Date()
+      });
     }
   } catch (e) {
     console.log('⚠️ trackSignalResult error for', symbol, '-', e.message);
@@ -319,7 +410,6 @@ function generateApiKey() {
 const approvedKeyboard = { remove_keyboard: true };
 const trialKeyboard = { remove_keyboard: true };
 
-// ✅ পরিবর্তিত বাটন টেক্সট
 const signalInlineKeyboard = {
   inline_keyboard: [
     [
@@ -349,12 +439,14 @@ function symbolFromDisplayPair(displayPair) {
   return displayPair.replace(' OTC', '');
 }
 
+// ✅ পরিবর্তিত — datetime field যোগ করা হয়েছে (candle-exact matching এর জন্য দরকার)
 async function getCandles(symbol) {
   const data = await twelveData.getTimeSeries(symbol, '1min', 30);
   if (!data.values || data.values.length === 0) throw new Error('No candle data');
   return data.values.map(v => ({
     open: parseFloat(v.open), high: parseFloat(v.high),
-    low: parseFloat(v.low), close: parseFloat(v.close)
+    low: parseFloat(v.low), close: parseFloat(v.close),
+    datetime: v.datetime
   })).reverse();
 }
 
@@ -581,7 +673,6 @@ bot.onText(/\/start/, async (msg) => {
     );
   }
 
-  // ✅ পরিবর্তিত — Unlimited Access + Start Analysis এক মেসেজে মার্জ করা
   if (isApproved(userId)) {
     await bot.sendMessage(chatId,
       '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
@@ -611,7 +702,6 @@ bot.onText(/\/start/, async (msg) => {
   const signalLeft = getTrialSignalLeft(userId);
   const screenshotLeft = getTrialScreenshotLeft(userId);
 
-  // ✅ পরিবর্তিত — Free Trial + Start Analysis এক মেসেজে মার্জ করা
   if (signalLeft > 0 || screenshotLeft > 0) {
     await bot.sendMessage(chatId,
       '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
@@ -639,7 +729,6 @@ bot.onText(/\/start/, async (msg) => {
     return;
   }
 
-  // ✅ পরিবর্তিত — Free Trial Expired নতুন টেক্সট
   await bot.sendMessage(chatId,
     '╭━━━━━━━━━━━━━━━━━━━━╮\n' +
     '    🤖 𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬\n' +
@@ -703,7 +792,7 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// ✅ পরিবর্তিত — /approve কমান্ডে "Verification Success" নতুন টেক্সট
+// /approve — এখনো manual override হিসেবে available (edge case handling)
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
@@ -875,7 +964,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // ✅ পরিবর্তিত — password verify success: Bot Access Activated + Start Analysis এক মেসেজে মার্জ
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
@@ -914,7 +1002,9 @@ bot.on('message', async (msg) => {
 
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
-  // ✅ পরিবর্তিত — auto-verify (affiliate postback) মেসেজে নতুন "Verification Success" টেক্সট
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ পরিবর্তিত — সঠিক Trader ID হলে সরাসরি API key দিয়ে access, admin শুধু info notification পাবে
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   if (affRecord) {
     const apiKey = generateApiKey();
     passwordMode.set(userId, apiKey);
@@ -926,21 +1016,31 @@ bot.on('message', async (msg) => {
       { parse_mode: 'Markdown' }
     );
     await bot.sendMessage(ADMIN_ID,
-      '⚡ *AUTO-VERIFIED (Affiliate Postback)*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`',
+      '⚡ *New Affiliate User*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`',
       { parse_mode: 'Markdown' }
     );
     return;
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ পরিবর্তিত — ভুল/না-মেলা Trader ID হলে সরাসরি ইউজারকে জানানো, admin manual approve চাওয়া হয় না
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
-  await bot.sendMessage(ADMIN_ID,
-    '🔔 *NEW TRADER ID SUBMISSION*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n\n⚠️ Affiliate list এ পাওয়া যায়নি — ম্যানুয়ালি চেক করুন।\n\n✅ Approve: `/approve ' + userId + '`',
-    { parse_mode: 'Markdown' }
-  );
   await bot.sendMessage(chatId,
-    '✅ *Trader ID সফলভাবে জমা হয়েছে!*\n\n⏳ Admin verification এর জন্য অপেক্ষা করুন। 🔔',
-    { parse_mode: 'Markdown' }
+    '❌ 𝗩𝗲𝗿𝗶𝗳𝗶𝗰𝗮𝘁𝗶𝗼𝗻 𝗙𝗮𝗶𝗹𝗲𝗱\n\n' +
+    'আপনার দেওয়া Trader ID `' + text + '` আমাদের অফিসিয়াল লিংকের মাধ্যমে খোলা কোনো অ্যাকাউন্টের সাথে মিলেনি।\n\n' +
+    '📌 সঠিকভাবে verify করতে অনুগ্রহ করে নিচের লিংক থেকে *নতুন* একটি Quotex অ্যাকাউন্ট খুলুন, তারপর আপনার Trader ID আবার পাঠান।\n\n' +
+    '⚠️ শুধুমাত্র এই লিংক দিয়ে খোলা অ্যাকাউন্টই স্বয়ংক্রিয়ভাবে ভেরিফাই হবে।',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🚀 𝗖𝗿𝗲𝗮𝘁𝗲 𝗤𝘂𝗼𝘁𝗲𝘅 𝗔𝗰𝗰𝗼𝘂𝗻𝘁', url: 'https://market-qx.pro/sign-up/?lid=2178055' }],
+          [{ text: '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗', callback_data: '/verify' }]
+        ]
+      }
+    }
   );
 });
 
@@ -985,17 +1085,21 @@ async function generateSignalForPair(chatId, userId, pair) {
       signal = { direction: directions[Math.floor(Math.random() * 2)], confidence: 'Medium 🟡', winRate: '75%', symbol: symbolFromDisplayPair(pair) };
     }
 
+    // ✅ পরিবর্তিত — entry মুহূর্ত এখন real-UTC minute হিসেবে হিসাব করা হচ্ছে, যাতে candle datetime এর সাথে exact match করা যায়
     const now2 = new Date();
-    const bd2 = new Date(now2.getTime() + 6 * 60 * 60 * 1000);
-    bd2.setMinutes(bd2.getMinutes() + 1);
+    const entryDate = new Date(Math.floor((now2.getTime() + 60000) / 60000) * 60000); // পরের full minute (real UTC)
+    const entryDatetimeStr = formatUTCDateTime(entryDate);
+
+    const bd2 = new Date(entryDate.getTime() + 6 * 60 * 60 * 1000); // শুধু display এর জন্য BD সময়ে দেখানো
     const exH = String(bd2.getUTCHours()).padStart(2, '0');
     const exM = String(bd2.getUTCMinutes()).padStart(2, '0');
+    const entryDisplayTime = exH + ':' + exM;
 
     const trialInfo = isApproved(userId) ? '' : '\n📊 Signal বাকি: *' + getTrialSignalLeft(userId) + '/' + FREE_TRIAL_SIGNAL + '*';
 
     const sentMsg = await bot.sendMessage(chatId,
       '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
-      '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🕒 *𝗘𝗡𝗧𝗥𝗬* ➜ `' + exH + ':' + exM + '`\n══════════════════\n' +
+      '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🕒 *𝗘𝗡𝗧𝗥𝗬* ➜ `' + entryDisplayTime + '`\n══════════════════\n' +
       '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
       '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️' + trialInfo,
       {
@@ -1006,7 +1110,9 @@ async function generateSignalForPair(chatId, userId, pair) {
 
     if (sentMsg) lastSignalMsgId.set(userId, sentMsg.message_id);
 
-    trackSignalResult(userId, signal.symbol, signal.direction).catch(e => console.log('trackSignalResult error:', e.message));
+    // ✅ পরিবর্তিত — নতুন candle-based tracker, exact entry datetime সহ কল করা হচ্ছে
+    trackSignalResult(userId, signal.symbol, signal.direction, entryDatetimeStr, entryDisplayTime)
+      .catch(e => console.log('trackSignalResult error:', e.message));
   } catch (e) {
     console.error('generateSignalForPair error:', e.message);
     try { await bot.sendMessage(chatId, '❌ Signal তৈরি করতে সমস্যা হয়েছে, আবার চেষ্টা করুন।'); } catch (err) {}
@@ -1289,7 +1395,7 @@ app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT
 connectDB().then(() => {
   sessionModule = require('./session');
   sessionModule(bot);
-  console.log('Bot running v21 - Market-Aware Pairs + Result Tracking + Daily Admin Report...');
+  console.log('Bot running v22 - Direct Affiliate Verify + Real Candle-Based Result Tracking...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
