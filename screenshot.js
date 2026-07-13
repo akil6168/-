@@ -236,11 +236,17 @@ REASON: (2 sentence detailed explanation)`
       res.on('end', () => {
         try {
           const json = JSON.parse(data);
+
+          if (!json.candidates || !json.candidates[0]) {
+            console.log('GEMINI ERROR RESPONSE (status ' + res.statusCode + '):', JSON.stringify(json));
+            return reject(new Error(json.error?.message || 'No candidates in Gemini response'));
+          }
+
           const text = json.candidates[0].content.parts[0].text;
           console.log('GEMINI RAW:\n' + text);
           resolve(text);
         } catch (e) {
-          console.log('PARSE ERROR:', e.message);
+          console.log('PARSE ERROR:', e.message, '| RAW DATA:', data);
           reject(e);
         }
       });
