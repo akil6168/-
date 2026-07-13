@@ -6,12 +6,19 @@ const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
 
-// ✅ Step-by-step progress steps (typewriter সরিয়ে এটা দিয়ে replace করা হয়েছে)
+// ✅ Step-by-step progress steps (একটা একটা করে যোগ হবে, আগেরগুলো থাকবে)
 const progressSteps = [
   '🔍 𝗦𝗰𝗮𝗻𝗻𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁...',
   '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁 𝗧𝗿𝗲𝗻𝗱...',
   '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
   '🎯 𝗘𝗻𝘁𝗿𝘆 𝗖𝗼𝗻𝗳𝗶𝗿𝗺𝗮𝘁𝗶𝗼𝗻...'
+];
+
+// ✅ Gemini মডেল fallback অর্ডার - প্রথমটা 503/overload দিলে পরেরটায় switch হবে
+const GEMINI_MODELS = [
+  'gemini-flash-latest',
+  'gemini-1.5-flash',
+  'gemini-1.5-flash-8b'
 ];
 
 function getBDDateKey() {
@@ -68,13 +75,12 @@ function getEntryExpiry() {
   };
 }
 
-// ✅ প্রতিটা step-এর status ('done' | 'active' | 'pending') অনুযায়ী emoji + label বানায়
+// ✅ শুধু activeIndex পর্যন্ত step গুলো দেখাবে (pending/future step দেখাবে না)
+// আগের সব step ✅ (done), শেষেরটা 🔄 (running) থাকবে
 function buildProgressBlock(activeIndex) {
-  return progressSteps.map((label, idx) => {
-    let icon;
-    if (idx < activeIndex) icon = '✅';
-    else if (idx === activeIndex) icon = '🔄';
-    else icon = '⬜';
+  const visibleSteps = progressSteps.slice(0, activeIndex + 1);
+  return visibleSteps.map((label, idx) => {
+    const icon = idx < activeIndex ? '✅' : '🔄';
     return icon + ' ' + label;
   }).join('\n');
 }
@@ -91,8 +97,13 @@ function buildAnalysisMessage(remaining, activeIndex) {
   );
 }
 
-async function analyzeChartWithGemini(imageBase64) {
-  return new Promise((resolve, reject) => {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ✅ একটা মডেলে single attempt। রিটার্ন করে { ok, retryable, text }
+function callGeminiModel(model, imageBase64) {
+  return new Promise((resolve) => {
     const body = JSON.stringify({
       contents: [{
         parts: [
@@ -222,7 +233,7 @@ REASON: (2 sentence detailed explanation)`
 
     const options = {
       hostname: 'generativelanguage.googleapis.com',
-      path: `/v1beta/models/gemini-flash-latest:generateContent?key=${GEMINI_API_KEY}`,
+      path: `/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`,
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -234,28 +245,62 @@ REASON: (2 sentence detailed explanation)`
       let data = '';
       res.on('data', chunk => data += chunk);
       res.on('end', () => {
+        const status = res.statusCode;
+
+        // ✅ overload / rate-limit / server error → retryable, model বদলানো বা আবার try করা যাবে
+        if (status === 503 || status === 429 || status >= 500) {
+          console.log(`GEMINI [${model}] RETRYABLE STATUS ${status}:`, data.slice(0, 300));
+          resolve({ ok: false, retryable: true, text: null });
+          return;
+        }
+
         try {
           const json = JSON.parse(data);
-
           if (!json.candidates || !json.candidates[0]) {
-            console.log('GEMINI ERROR RESPONSE (status ' + res.statusCode + '):', JSON.stringify(json));
-            return reject(new Error(json.error?.message || 'No candidates in Gemini response'));
+            console.log(`GEMINI [${model}] NO CANDIDATES:`, data.slice(0, 300));
+            resolve({ ok: false, retryable: true, text: null });
+            return;
           }
-
           const text = json.candidates[0].content.parts[0].text;
-          console.log('GEMINI RAW:\n' + text);
-          resolve(text);
+          console.log(`GEMINI [${model}] RAW:\n` + text);
+          resolve({ ok: true, retryable: false, text });
         } catch (e) {
-          console.log('PARSE ERROR:', e.message, '| RAW DATA:', data);
-          reject(e);
+          console.log(`GEMINI [${model}] PARSE ERROR:`, e.message);
+          resolve({ ok: false, retryable: true, text: null });
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (e) => {
+      console.log(`GEMINI [${model}] REQUEST ERROR:`, e.message);
+      resolve({ ok: false, retryable: true, text: null });
+    });
     req.write(body);
     req.end();
   });
+}
+
+// ✅ প্রতিটা মডেল একবার করে, তারপর পুরো লিস্ট আবার ২ বার retry (delay সহ)
+// অর্থাৎ overload হলে user কে error না দিয়ে নিজে থেকে সামলে নেবে
+async function analyzeChartWithGemini(imageBase64) {
+  const maxRounds = 2;          // পুরো model list কতবার আবার ঘুরে দেখবে
+  const delayBetweenRounds = 3000; // ms
+
+  for (let round = 0; round < maxRounds; round++) {
+    for (const model of GEMINI_MODELS) {
+      const result = await callGeminiModel(model, imageBase64);
+      if (result.ok) {
+        return result.text;
+      }
+      // retryable হলে সাথে সাথেই পরের মডেল try করবে (delay ছাড়া)
+    }
+    // সব মডেল এই round-এ fail করলে একটু wait করে আবার পুরো লিস্ট try করবে
+    if (round < maxRounds - 1) {
+      await sleep(delayBetweenRounds);
+    }
+  }
+
+  throw new Error('All Gemini models unavailable after retries (503/overload)');
 }
 
 function parseGeminiResponse(text) {
@@ -344,7 +389,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
-    // ✅ প্রথম state: সব step ⬜, প্রথম step শুরু হয় 🔄 দিয়ে
+    // ✅ প্রথম state: শুধু প্রথম step দেখাবে, 🔄 দিয়ে
     let activeStepIndex = 0;
     let remaining = waitSeconds;
 
@@ -353,18 +398,23 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ Lightweight step-by-step progress animation
-    // পুরো waitSeconds কে progressSteps.length সংখ্যক ভাগে ভাগ করা হয়েছে,
-    // প্রতিটা ভাগ শেষ হলে একবার editMessageText() কল হয় (মোট ৩-৫ বার, প্রতি সেকেন্ডে না)
+    // ✅ প্রতি সেকেন্ডে countdown আপডেট হবে (real per-second tick)
+    // step change হবে waitSeconds কে ৪ ভাগে ভাগ করে - প্রতি ভাগ শেষে
+    // নতুন step নিচে যোগ হবে, আগেরগুলো ✅ হয়ে থেকে যাবে
     const stepDuration = Math.max(1, Math.floor(waitSeconds / progressSteps.length));
-    let elapsed = 0;
+    let elapsedSeconds = 0;
 
-    const progressInterval = setInterval(async () => {
-      elapsed += stepDuration;
-      remaining = Math.max(0, waitSeconds - elapsed);
+    const tickInterval = setInterval(async () => {
+      elapsedSeconds++;
+      remaining = Math.max(0, waitSeconds - elapsedSeconds);
 
-      if (activeStepIndex < progressSteps.length - 1) {
-        activeStepIndex++;
+      // এই সেকেন্ডে পরের step-এ যাওয়ার সময় হলে index বাড়বে
+      const targetIndex = Math.min(
+        progressSteps.length - 1,
+        Math.floor(elapsedSeconds / stepDuration)
+      );
+      if (targetIndex > activeStepIndex) {
+        activeStepIndex = targetIndex;
       }
 
       try {
@@ -374,10 +424,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         );
       } catch (e) {}
 
-      if (activeStepIndex >= progressSteps.length - 1 || remaining <= 0) {
-        clearInterval(progressInterval);
+      if (remaining <= 0) {
+        clearInterval(tickInterval);
       }
-    }, stepDuration * 1000);
+    }, 1000); // ✅ প্রতি ১ সেকেন্ডে একবার
 
     try {
       const photos = msg.photo;
@@ -398,7 +448,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       const geminiPromise = analyzeChartWithGemini(imageBase64);
 
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
-      clearInterval(progressInterval);
+      clearInterval(tickInterval);
 
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
@@ -452,7 +502,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         '━━━━━━━━━━━━━━━━\n\n' +
         '🎯 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ' + signal.confidence + ' ' + confEmoji + ' (' + signal.winRate + ')\n' +
         '📊 𝗧𝗥𝗘𝗡𝗗 ➜ ' + signal.trend + '\n\n' +
-        '💡 𝗔𝗜 𝗩𝗜𝗘𝗪\n' +
+        '🧠 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦 𝗩𝗜𝗘𝗪\n' +
         signal.reason + '\n\n' +
         '━━━━━━━━━━━━━━━━\n\n' +
         '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: *' + remainingCount + '/5*\n\n' +
@@ -467,7 +517,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       lastSignalMsgId.set(userId, sentMsg.message_id);
 
     } catch (e) {
-      clearInterval(progressInterval);
+      clearInterval(tickInterval);
       console.log('ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
       // ✅ পরিবর্তিত — error catch মেসেজ
