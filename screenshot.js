@@ -6,11 +6,12 @@ const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
 
-// ✅ typewriter animation এর জন্য step গুলো আলাদা array-তে
-const analysisSteps = [
+// ✅ Step-by-step progress steps (typewriter সরিয়ে এটা দিয়ে replace করা হয়েছে)
+const progressSteps = [
+  '🔍 𝗦𝗰𝗮𝗻𝗻𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁...',
+  '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁 𝗧𝗿𝗲𝗻𝗱...',
   '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
-  '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...',
-  '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...'
+  '🎯 𝗘𝗻𝘁𝗿𝘆 𝗖𝗼𝗻𝗳𝗶𝗿𝗺𝗮𝘁𝗶𝗼𝗻...'
 ];
 
 function getBDDateKey() {
@@ -65,6 +66,29 @@ function getEntryExpiry() {
     entry: entryH + ':' + entryM,
     expiry: expiryH + ':' + expiryM
   };
+}
+
+// ✅ প্রতিটা step-এর status ('done' | 'active' | 'pending') অনুযায়ী emoji + label বানায়
+function buildProgressBlock(activeIndex) {
+  return progressSteps.map((label, idx) => {
+    let icon;
+    if (idx < activeIndex) icon = '✅';
+    else if (idx === activeIndex) icon = '🔄';
+    else icon = '⬜';
+    return icon + ' ' + label;
+  }).join('\n');
+}
+
+function buildAnalysisMessage(remaining, activeIndex) {
+  const { h, m, s } = getBDTime();
+  return (
+    '╭━━━━━━━━━━━━━━━━━━━━━━╮\n' +
+    '┃ 🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦 ┃\n' +
+    '╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n' +
+    '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲 ➜ ' + h + ':' + m + ':' + s + '\n' +
+    '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻 ➜ ' + remaining + 's\n\n' +
+    buildProgressBlock(activeIndex)
+  );
 }
 
 async function analyzeChartWithGemini(imageBase64) {
@@ -314,41 +338,40 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
+    // ✅ প্রথম state: সব step ⬜, প্রথম step শুরু হয় 🔄 দিয়ে
+    let activeStepIndex = 0;
+    let remaining = waitSeconds;
+
     const loadMsg = await bot.sendMessage(chatId,
-      '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
-      '⏳ 𝗣𝗿𝗲𝗽𝗮𝗿𝗶𝗻𝗴 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹...\n' +
-      '⏰ 𝗘𝘀𝘁𝗶𝗺𝗮𝘁𝗲𝗱 𝗧𝗶𝗺𝗲: ' + waitSeconds + 's',
+      buildAnalysisMessage(remaining, activeStepIndex),
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ typewriter animation state — প্রতিটা photo event এর নিজস্ব closure, তাই একাধিক ইউজারে conflict হবে না
-    let charsRevealed = 0;
-    const fullStepsText = analysisSteps.join('\n');
-    const totalChars = fullStepsText.length;
-    // waitSeconds এর মধ্যেই পুরো animation শেষ হওয়ার মতো speed হিসাব করা
-    const charsPerTick = Math.max(1, Math.ceil(totalChars / Math.max(waitSeconds - 2, 1)));
+    // ✅ Lightweight step-by-step progress animation
+    // পুরো waitSeconds কে progressSteps.length সংখ্যক ভাগে ভাগ করা হয়েছে,
+    // প্রতিটা ভাগ শেষ হলে একবার editMessageText() কল হয় (মোট ৩-৫ বার, প্রতি সেকেন্ডে না)
+    const stepDuration = Math.max(1, Math.floor(waitSeconds / progressSteps.length));
+    let elapsed = 0;
 
-    let remaining = waitSeconds;
-    const countdownInterval = setInterval(async () => {
-      remaining--;
-      const { h, m, s } = getBDTime();
+    const progressInterval = setInterval(async () => {
+      elapsed += stepDuration;
+      remaining = Math.max(0, waitSeconds - elapsed);
 
-      // ✅ typewriter reveal — প্রতি tick এ কিছু অক্ষর বেশি দেখানো হবে
-      charsRevealed = Math.min(totalChars, charsRevealed + charsPerTick);
-      let visibleSteps = fullStepsText.substring(0, charsRevealed);
-      if (charsRevealed < totalChars) visibleSteps += '▌';
+      if (activeStepIndex < progressSteps.length - 1) {
+        activeStepIndex++;
+      }
 
       try {
         await bot.editMessageText(
-          '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
-          '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲: ' + h + ':' + m + ':' + s + '\n' +
-          '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻: ' + remaining + 's\n\n' +
-          visibleSteps,
+          buildAnalysisMessage(remaining, activeStepIndex),
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
-      if (remaining <= 0) clearInterval(countdownInterval);
-    }, 1000);
+
+      if (activeStepIndex >= progressSteps.length - 1 || remaining <= 0) {
+        clearInterval(progressInterval);
+      }
+    }, stepDuration * 1000);
 
     try {
       const photos = msg.photo;
@@ -369,7 +392,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       const geminiPromise = analyzeChartWithGemini(imageBase64);
 
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
-      clearInterval(countdownInterval);
+      clearInterval(progressInterval);
 
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
@@ -438,7 +461,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       lastSignalMsgId.set(userId, sentMsg.message_id);
 
     } catch (e) {
-      clearInterval(countdownInterval);
+      clearInterval(progressInterval);
       console.log('ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
       // ✅ পরিবর্তিত — error catch মেসেজ
