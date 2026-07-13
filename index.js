@@ -630,14 +630,14 @@ bot.onText(/\/maintenance (.+)/, async (msg, match) => {
     await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode চালু হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-on) fail for', uid, e.message); }
+      try { await bot.sendMessage(uid, '⚠️ The bot is currently under maintenance. Please wait while we complete the process...', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-on) fail for', uid, e.message); }
     }
   } else if (action === 'off') {
     maintenanceMode = false;
     await bot.sendMessage(ADMIN_ID, '✅ *Maintenance Mode বন্ধ হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try { await bot.sendMessage(uid, '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-off) fail for', uid, e.message); }
+      try { await bot.sendMessage(uid, '✅ System update completed successfully. All services are now available', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-off) fail for', uid, e.message); }
     }
   } else {
     await bot.sendMessage(ADMIN_ID, '❌ Format: /maintenance on অথবা /maintenance off');
