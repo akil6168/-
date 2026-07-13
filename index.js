@@ -62,6 +62,7 @@ const broadcastMode = new Set();
 const banMode = new Set();
 const unbanMode = new Set();
 const unapproveMode = new Set();
+const delAffiliateMode = new Set();
 const messageUserMode = new Set();
 const pendingMessageTarget = new Map();
 
@@ -773,19 +774,12 @@ bot.onText(/\/admin/, async (msg) => {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '👥 Total Users', callback_data: 'admin_total' }],
-          [{ text: '✅ Approved Users', callback_data: 'admin_approved' }],
-          [{ text: '⏳ Pending Verify List', callback_data: 'admin_pending' }],
-          [{ text: '📋 Trader ID Submissions', callback_data: 'admin_submissions' }],
-          [{ text: '⚡ Affiliate Verified List', callback_data: 'admin_affiliate' }],
-          [{ text: '📊 Today Report Now', callback_data: 'admin_report_now' }],
-          [{ text: '📢 Broadcast Message', callback_data: 'admin_broadcast' }],
-          [{ text: '💬 Message a User', callback_data: 'admin_message_prompt' }],
-          [{ text: '❌ Unapprove User', callback_data: 'admin_unapprove_prompt' }],
-          [{ text: '🚫 Ban User', callback_data: 'admin_ban_prompt' }],
-          [{ text: '✅ Unban User', callback_data: 'admin_unban_prompt' }],
-          [{ text: maintenanceMode ? '✅ Maintenance OFF' : '🔧 Maintenance ON', callback_data: 'admin_maintenance' }],
-          [{ text: '🚀 Start Session Now', callback_data: 'admin_session_start' }]
+          [{ text: '👥 Users', callback_data: 'admin_total' }, { text: '📊 Report', callback_data: 'admin_report_now' }],
+          [{ text: '✅ Approved', callback_data: 'admin_approved' }, { text: '⚡ Affiliates', callback_data: 'admin_affiliate' }],
+          [{ text: '❌ Remove Aff', callback_data: 'admin_delaffiliate_prompt' }, { text: '💬 Message', callback_data: 'admin_message_prompt' }],
+          [{ text: '📢 Broadcast', callback_data: 'admin_broadcast' }, { text: '🚀 Session', callback_data: 'admin_session_start' }],
+          [{ text: '🚫 Ban', callback_data: 'admin_ban_prompt' }, { text: '✅ Unban', callback_data: 'admin_unban_prompt' }],
+          [{ text: '❌ Unapprove', callback_data: 'admin_unapprove_prompt' }, { text: '🔧 Maintenance', callback_data: 'admin_maintenance' }]
         ]
       }
     }
@@ -854,10 +848,23 @@ bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   const targetId = parseInt(match[1]);
   const text = match[2];
   try {
-    await bot.sendMessage(targetId, '💬 Admin Message:\n\n' + text);
+    await bot.sendMessage(targetId, text);
     await bot.sendMessage(ADMIN_ID, '✅ Message পাঠানো হয়েছে `' + targetId + '` কে।', { parse_mode: 'Markdown' });
   } catch (e) {
     await bot.sendMessage(ADMIN_ID, '❌ Message পাঠানো যায়নি (হয়তো user bot block করেছে বা কখনো /start দেয়নি)।\nError: ' + e.message);
+  }
+});
+
+// /delaffiliate — affiliateVerified কালেকশন থেকে একটা traderId এন্ট্রি মুছে ফেলা (টেস্ট/ভুল এন্ট্রি cleanup এর জন্য)
+bot.onText(/\/delaffiliate (.+)/, async (msg, match) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  const traderId = match[1].trim();
+  if (!db) { await bot.sendMessage(ADMIN_ID, '❌ DB এখনো রেডি না।'); return; }
+  const result = await db.collection('affiliateVerified').deleteOne({ traderId });
+  if (result.deletedCount > 0) {
+    await bot.sendMessage(ADMIN_ID, '✅ *Affiliate এন্ট্রি মুছে ফেলা হয়েছে!*\n\n📌 Trader ID: `' + traderId + '`', { parse_mode: 'Markdown' });
+  } else {
+    await bot.sendMessage(ADMIN_ID, '⚠️ এই Trader ID `' + traderId + '` affiliateVerified লিস্টে পাওয়া যায়নি।', { parse_mode: 'Markdown' });
   }
 });
 
@@ -897,7 +904,7 @@ bot.on('message', async (msg) => {
     let successCount = 0;
     for (const uid of startedUsers) {
       try {
-        await bot.sendMessage(uid, '📢 Admin Message:\n\n' + text);
+        await bot.sendMessage(uid, text);
         successCount++;
       } catch (e) {
         console.error('broadcast fail for', uid, e.message);
@@ -920,7 +927,7 @@ bot.on('message', async (msg) => {
     const targetId = pendingMessageTarget.get(userId);
     pendingMessageTarget.delete(userId);
     try {
-      await bot.sendMessage(targetId, '💬 Admin Message:\n\n' + text);
+      await bot.sendMessage(targetId, text);
       await bot.sendMessage(ADMIN_ID, '✅ Message পাঠানো হয়েছে `' + targetId + '` কে।', { parse_mode: 'Markdown' });
     } catch (e) {
       await bot.sendMessage(ADMIN_ID, '❌ Message পাঠানো যায়নি (হয়তো user bot block করেছে বা কখনো /start দেয়নি)।\nError: ' + e.message);
@@ -950,6 +957,18 @@ bot.on('message', async (msg) => {
     passwordMode.delete(targetId);
     await bot.sendMessage(ADMIN_ID, '🚫 *User Banned!*\n\n🆔 User ID: `' + targetId + '`', { parse_mode: 'Markdown' });
     try { await bot.sendMessage(targetId, '🚫 আপনাকে bot থেকে ban করা হয়েছে।'); } catch (e) { console.error('notify(ban) fail for', targetId, e.message); }
+    return;
+  }
+
+  if (delAffiliateMode.has(userId) && userId === ADMIN_ID) {
+    delAffiliateMode.delete(userId);
+    const traderId = text.trim();
+    const result = await db.collection('affiliateVerified').deleteOne({ traderId });
+    if (result.deletedCount > 0) {
+      await bot.sendMessage(ADMIN_ID, '✅ *Affiliate এন্ট্রি মুছে ফেলা হয়েছে!*\n\n📌 Trader ID: `' + traderId + '`', { parse_mode: 'Markdown' });
+    } else {
+      await bot.sendMessage(ADMIN_ID, '⚠️ এই Trader ID `' + traderId + '` affiliateVerified লিস্টে পাওয়া যায়নি।', { parse_mode: 'Markdown' });
+    }
     return;
   }
 
@@ -1224,6 +1243,12 @@ bot.on('callback_query', async (query) => {
       text += (i + 1) + '. 📌 Trader ID: `' + a.traderId + '`\n📊 Status: `' + (a.status || 'unknown') + '`\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_delaffiliate_prompt' && userId === ADMIN_ID) {
+    delAffiliateMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🗑️ যে *Trader ID* affiliateVerified লিস্ট থেকে মুছতে চাও সেটা পাঠাও:', { parse_mode: 'Markdown' });
     return;
   }
 
