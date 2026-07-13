@@ -6,14 +6,6 @@ const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
 
-// ✅ Step-by-step progress steps (typewriter সরিয়ে এটা দিয়ে replace করা হয়েছে)
-const progressSteps = [
-  '🔍 𝗦𝗰𝗮𝗻𝗻𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁...',
-  '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗠𝗮𝗿𝗸𝗲𝘁 𝗧𝗿𝗲𝗻𝗱...',
-  '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
-  '🎯 𝗘𝗻𝘁𝗿𝘆 𝗖𝗼𝗻𝗳𝗶𝗿𝗺𝗮𝘁𝗶𝗼𝗻...'
-];
-
 function getBDDateKey() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
@@ -66,29 +58,6 @@ function getEntryExpiry() {
     entry: entryH + ':' + entryM,
     expiry: expiryH + ':' + expiryM
   };
-}
-
-// ✅ প্রতিটা step-এর status ('done' | 'active' | 'pending') অনুযায়ী emoji + label বানায়
-function buildProgressBlock(activeIndex) {
-  return progressSteps.map((label, idx) => {
-    let icon;
-    if (idx < activeIndex) icon = '✅';
-    else if (idx === activeIndex) icon = '🔄';
-    else icon = '⬜';
-    return icon + ' ' + label;
-  }).join('\n');
-}
-
-function buildAnalysisMessage(remaining, activeIndex) {
-  const { h, m, s } = getBDTime();
-  return (
-    '╭━━━━━━━━━━━━━━━━━━━━━━╮\n' +
-    '┃ 🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦 ┃\n' +
-    '╰━━━━━━━━━━━━━━━━━━━━━━╯\n\n' +
-    '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲 ➜ ' + h + ':' + m + ':' + s + '\n' +
-    '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻 ➜ ' + remaining + 's\n\n' +
-    buildProgressBlock(activeIndex)
-  );
 }
 
 async function analyzeChartWithGemini(imageBase64) {
@@ -321,15 +290,14 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       const count = getUserCount(userId);
       if (count >= 5) {
         await bot.sendMessage(chatId,
-          '⚠️ 𝗧𝗼𝗱𝗮𝘆\'𝘀 𝗔𝗜 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗟𝗶𝗺𝗶𝘁 𝗥𝗲𝗮𝗰𝗵𝗲𝗱!\n\n' +
-          '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊 বাটন ব্যবহার করে নতুন Signal নিন।',
+          'ðŸ“Š à¦†à¦œà¦•à§‡à¦° AI Screenshot analysis à¦²à¦¿à¦®à¦¿à¦Ÿ à¦¶à§‡à¦·!\n\nâž• *Generate New Signal ðŸ“Š* à¦¬à¦¾à¦Ÿà¦¨ à¦¦à¦¿à¦¯à¦¼à§‡ signal à¦¨à¦¿à¦¨à¥¤',
           { parse_mode: 'Markdown' }
         );
         return;
       }
     }
 
-    // আগের signal message delete
+    // à¦†à¦—à§‡à¦° signal message delete
     if (lastSignalMsgId.has(userId)) {
       try { await bot.deleteMessage(chatId, lastSignalMsgId.get(userId)); } catch (e) {}
       lastSignalMsgId.delete(userId);
@@ -338,40 +306,33 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
-    // ✅ প্রথম state: সব step ⬜, প্রথম step শুরু হয় 🔄 দিয়ে
-    let activeStepIndex = 0;
-    let remaining = waitSeconds;
-
     const loadMsg = await bot.sendMessage(chatId,
-      buildAnalysisMessage(remaining, activeStepIndex),
+      'ðŸ§  *AI Deep Analysis à¦¶à§à¦°à§ à¦¹à¦šà§à¦›à§‡...*\n\n' +
+      'â° Signal à¦¦à§‡à¦“à¦¯à¦¼à¦¾ à¦¹à¦¬à§‡: *' + waitSeconds + ' seconds* à¦ªà¦°à§‡\n\n' +
+      'ðŸ” Candlestick â€¢ Trend â€¢ Price Action\n' +
+      'ðŸ“ˆ S/R â€¢ Momentum â€¢ SMC â€¢ Volume\n' +
+      'ðŸ’¡ ADX â€¢ Supertrend â€¢ Ichimoku â€¢ VWAP',
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ Lightweight step-by-step progress animation
-    // পুরো waitSeconds কে progressSteps.length সংখ্যক ভাগে ভাগ করা হয়েছে,
-    // প্রতিটা ভাগ শেষ হলে একবার editMessageText() কল হয় (মোট ৩-৫ বার, প্রতি সেকেন্ডে না)
-    const stepDuration = Math.max(1, Math.floor(waitSeconds / progressSteps.length));
-    let elapsed = 0;
-
-    const progressInterval = setInterval(async () => {
-      elapsed += stepDuration;
-      remaining = Math.max(0, waitSeconds - elapsed);
-
-      if (activeStepIndex < progressSteps.length - 1) {
-        activeStepIndex++;
-      }
-
+    let remaining = waitSeconds;
+    const countdownInterval = setInterval(async () => {
+      remaining--;
+      const { h, m, s } = getBDTime();
       try {
         await bot.editMessageText(
-          buildAnalysisMessage(remaining, activeStepIndex),
+          'ðŸ§  *AI Deep Chart Analysis*\n\n' +
+          'â° BD Time: *' + h + ':' + m + ':' + s + '*\n' +
+          'â³ Signal à¦†à¦¸à¦›à§‡: *' + remaining + ' seconds* à¦ªà¦°à§‡\n\n' +
+          'ðŸ” Candlestick â€¢ Heikin Ashi â€¢ SMC â€¢ Wyckoff\n' +
+          'ðŸ“Š RSI â€¢ MACD â€¢ Stochastic â€¢ ADX â€¢ CCI\n' +
+          'ðŸ“ˆ Ichimoku â€¢ Supertrend â€¢ VWAP â€¢ Volume Profile\n' +
+          'ðŸ’¡ Fibonacci â€¢ Pivot Points â€¢ Session Levels',
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
-
-      if (activeStepIndex >= progressSteps.length - 1 || remaining <= 0) {
-        clearInterval(progressInterval);
-      }
-    }, stepDuration * 1000);
+      if (remaining <= 0) clearInterval(countdownInterval);
+    }, 1000);
 
     try {
       const photos = msg.photo;
@@ -392,7 +353,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       const geminiPromise = analyzeChartWithGemini(imageBase64);
 
       await new Promise(resolve => setTimeout(resolve, waitSeconds * 1000));
-      clearInterval(progressInterval);
+      clearInterval(countdownInterval);
 
       const geminiResponse = await geminiPromise;
       const signal = parseGeminiResponse(geminiResponse);
@@ -400,8 +361,7 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       if (signal.notAChart) {
         try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
         await bot.sendMessage(chatId,
-          '⚠️ 𝗜𝗻𝘃𝗮𝗹𝗶𝗱 𝗖𝗵𝗮𝗿𝘁!\n\n' +
-          '📸 𝗣𝗹𝗲𝗮𝘀𝗲 𝘂𝗽𝗹𝗼𝗮𝗱 𝗮 𝗰𝗹𝗲𝗮𝗿 𝗤𝘂𝗼𝘁𝗲𝘅 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁',
+          'âŒ *à¦à¦Ÿà¦¾ trading chart à¦¨à¦¾!*\n\nðŸ“¸ à¦¶à§à¦§à§à¦®à¦¾à¦¤à§à¦° *Quotex chart screenshot* à¦ªà¦¾à¦ à¦¾à¦¨à¥¤',
           { parse_mode: 'Markdown' }
         );
         return;
@@ -414,43 +374,44 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         const left = getTrialScreenshotLeft(userId);
         if (left === 0) {
           await bot.sendMessage(chatId,
-            '⚠️ 𝗟𝗮𝘀𝘁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁!\n\n' +
-            '🔓 𝗩𝗲𝗿𝗶𝗳𝘆 𝘆𝗼𝘂𝗿 𝗮𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝘂𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀.',
+            'âš ï¸ à¦à¦Ÿà¦¾ à¦†à¦ªà¦¨à¦¾à¦° *à¦¶à§‡à¦· Free Trial screenshot!*\n\nVerify à¦•à¦°à§à¦¨ unlimited access à¦ªà§‡à¦¤à§‡à¥¤',
             { parse_mode: 'Markdown' }
           );
         }
       }
 
       const remainingCount = userId === ADMIN_ID
-        ? '∞'
+        ? 'âˆž'
         : isApproved(userId)
           ? String(5 - getUserCount(userId))
           : String(getTrialScreenshotLeft(userId));
 
-      const dirLabel = signal.direction === 'UP' ? '🟢 BUY' : '🔴 SELL';
-      const dirEmoji = signal.direction === 'UP' ? '⏫' : '⏬';
-      let confEmoji = '🟡';
+      const limitLabel = isApproved(userId) ? 'à¦†à¦œà¦•à§‡à¦° à¦¬à¦¾à¦•à¦¿' : 'Trial à¦¬à¦¾à¦•à¦¿';
+
+      const dirEmoji = signal.direction === 'UP' ? 'â«' : 'â¬';
+      let confEmoji = 'ðŸŸ¡';
       const confLower = (signal.confidence || '').toLowerCase();
-      if (confLower.includes('very')) confEmoji = '🔥';
-      else if (confLower.includes('high')) confEmoji = '🟢';
+      if (confLower.includes('very')) confEmoji = 'ðŸ”¥';
+      else if (confLower.includes('high')) confEmoji = 'ðŸŸ¢';
 
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
       const sentMsg = await bot.sendMessage(chatId,
-        '╔════════════════════╗\n' +
-        '🧠 𝗔𝗜 𝗖𝗛𝗔𝗥𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n' +
-        '╚════════════════════╝\n\n' +
-        '📈 𝗗𝗜𝗥𝗘𝗖𝗧𝗜𝗢𝗡 ➜ ' + dirLabel + ' ' + dirEmoji + '\n' +
-        '🕒 𝗘𝗡𝗧𝗥𝗬     ➜ ' + entry + '\n' +
-        '⏳ 𝗘𝗫𝗣𝗜𝗥𝗬    ➜ ' + expiry + '\n\n' +
-        '━━━━━━━━━━━━━━━━\n\n' +
-        '🎯 𝗖𝗢𝗡𝗙𝗜𝗗𝗘𝗡𝗖𝗘 ➜ ' + signal.confidence + ' ' + confEmoji + ' (' + signal.winRate + ')\n' +
-        '📊 𝗧𝗥𝗘𝗡𝗗 ➜ ' + signal.trend + '\n\n' +
-        '💡 𝗔𝗜 𝗩𝗜𝗘𝗪\n' +
-        signal.reason + '\n\n' +
-        '━━━━━━━━━━━━━━━━\n\n' +
-        '📸 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁𝘀 𝗟𝗲𝗳𝘁: *' + remainingCount + '/5*\n\n' +
-        '⚠️ 𝗠𝗮𝘅 𝟭 𝗦𝘁𝗲𝗽 𝗠𝗧𝗚',
+        'â•­â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•®\n' +
+        'â”‚  ðŸ§  *AI Deep Chart Analysis*\n' +
+        'â•°â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â•¯\n\n' +
+        'ðŸš€ *DIRECTION* âžœ ' + signal.direction + ' ' + dirEmoji + '\n' +
+        'ðŸ“Š *ENTRY*        âžœ `' + entry + '`\n' +
+        'â± *EXPIRY*      âžœ `' + expiry + '`\n' +
+        'â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n' +
+        'â™»ï¸ *WIN RATE*    âžœ `' + signal.winRate + '`\n' +
+        'âœ… *CONFIDENCE* âžœ ' + signal.confidence + ' ' + confEmoji + '\n' +
+        'ðŸ”€ *TREND*        âžœ `' + signal.trend + '`\n' +
+        'â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n' +
+        'ðŸ’¡ _' + signal.reason + '_\n' +
+        'â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•â•\n' +
+        'ðŸ“¸ ' + limitLabel + ': *' + remainingCount + '*\n' +
+        'âš ï¸ _Trade at your own risk if loss use 1 stet MTG_ âš ï¸',
         {
           parse_mode: 'Markdown',
           reply_markup: signalInlineKeyboard
@@ -461,14 +422,11 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       lastSignalMsgId.set(userId, sentMsg.message_id);
 
     } catch (e) {
-      clearInterval(progressInterval);
+      clearInterval(countdownInterval);
       console.log('ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
-      // ✅ পরিবর্তিত — error catch মেসেজ
       await bot.sendMessage(chatId,
-        '⚠️ 𝗢𝗼𝗽𝘀! 𝗦𝗼𝗿𝗿𝘆 𝘀𝗼𝗺𝗲𝘁𝗵𝗶𝗻𝗴 𝘄𝗲𝗻𝘁 𝘄𝗿𝗼𝗻𝗴 𝘄𝗵𝗶𝗹𝗲 𝗮𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝘁𝗵𝗲 𝗰𝗵𝗮𝗿𝘁.\n\n' +
-        '🔄 𝗣𝗹𝗲𝗮𝘀𝗲 𝘁𝗿𝘆 𝗮𝗴𝗮𝗶𝗻 𝗶𝗻 𝗮 𝗳𝗲𝘄 𝘀𝗲𝗰𝗼𝗻𝗱𝘀.\n\n' +
-        '➕ Tap 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊',
+        'âŒ Analysis failed!\n\nâž• *Generate New Signal ðŸ“Š* à¦¬à¦¾à¦Ÿà¦¨ à¦¦à¦¿à¦¯à¦¼à§‡ signal à¦¨à¦¿à¦¨à¥¤',
         { parse_mode: 'Markdown' }
       );
     }
