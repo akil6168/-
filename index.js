@@ -652,7 +652,7 @@ bot.onText(/\/start/, async (msg) => {
   const usernameHandle = msg.from.username || null;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, '⚠️ The bot is currently under maintenance. Please wait while we complete the process...', { parse_mode: 'Markdown' });
     return;
   }
   if (bannedUsers.has(userId)) {
