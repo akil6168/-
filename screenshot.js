@@ -6,6 +6,13 @@ const ADMIN_ID = 5724602667;
 
 const userScreenshotCount = new Map();
 
+// ✅ typewriter animation এর জন্য step গুলো আলাদা array-তে
+const analysisSteps = [
+  '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...',
+  '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...',
+  '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...'
+];
+
 function getBDDateKey() {
   const now = new Date();
   const bd = new Date(now.getTime() + 6 * 60 * 60 * 1000);
@@ -289,7 +296,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     if (isApproved(userId) && userId !== ADMIN_ID) {
       const count = getUserCount(userId);
       if (count >= 5) {
-        // ✅ পরিবর্তিত — Today's AI Screenshot Limit Reached
         await bot.sendMessage(chatId,
           '⚠️ 𝗧𝗼𝗱𝗮𝘆\'𝘀 𝗔𝗜 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁 𝗟𝗶𝗺𝗶𝘁 𝗥𝗲𝗮𝗰𝗵𝗲𝗱!\n\n' +
           '➕ 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊 বাটন ব্যবহার করে নতুন Signal নিন।',
@@ -308,30 +314,36 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
-    // ✅ পরিবর্তিত — প্রাথমিক লোডিং মেসেজ
     const loadMsg = await bot.sendMessage(chatId,
       '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
       '⏳ 𝗣𝗿𝗲𝗽𝗮𝗿𝗶𝗻𝗴 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹...\n' +
-      '⏰ 𝗘𝘀𝘁𝗶𝗺𝗮𝘁𝗲𝗱 𝗧𝗶𝗺𝗲: ' + waitSeconds + 's\n\n' +
-      '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...\n' +
-      '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...\n' +
-      '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...',
+      '⏰ 𝗘𝘀𝘁𝗶𝗺𝗮𝘁𝗲𝗱 𝗧𝗶𝗺𝗲: ' + waitSeconds + 's',
       { parse_mode: 'Markdown' }
     );
+
+    // ✅ typewriter animation state — প্রতিটা photo event এর নিজস্ব closure, তাই একাধিক ইউজারে conflict হবে না
+    let charsRevealed = 0;
+    const fullStepsText = analysisSteps.join('\n');
+    const totalChars = fullStepsText.length;
+    // waitSeconds এর মধ্যেই পুরো animation শেষ হওয়ার মতো speed হিসাব করা
+    const charsPerTick = Math.max(1, Math.ceil(totalChars / Math.max(waitSeconds - 2, 1)));
 
     let remaining = waitSeconds;
     const countdownInterval = setInterval(async () => {
       remaining--;
       const { h, m, s } = getBDTime();
-      // ✅ পরিবর্তিত — countdown মেসেজ
+
+      // ✅ typewriter reveal — প্রতি tick এ কিছু অক্ষর বেশি দেখানো হবে
+      charsRevealed = Math.min(totalChars, charsRevealed + charsPerTick);
+      let visibleSteps = fullStepsText.substring(0, charsRevealed);
+      if (charsRevealed < totalChars) visibleSteps += '▌';
+
       try {
         await bot.editMessageText(
           '🧠 𝗔𝗜 𝗗𝗘𝗘𝗣 𝗠𝗔𝗥𝗞𝗘𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n\n' +
           '⏰ 𝗕𝗗 𝗧𝗶𝗺𝗲: ' + h + ':' + m + ':' + s + '\n' +
           '⏳ 𝗦𝗶𝗴𝗻𝗮𝗹 𝗜𝗻: ' + remaining + 's\n\n' +
-          '📊 𝗔𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝗣𝗿𝗶𝗰𝗲 𝗔𝗰𝘁𝗶𝗼𝗻...\n' +
-          '📈 𝗖𝗵𝗲𝗰𝗸𝗶𝗻𝗴 𝗧𝗿𝗲𝗻𝗱 & 𝗠𝗼𝗺𝗲𝗻𝘁𝘂𝗺...\n' +
-          '🎯 𝗙𝗶𝗻𝗱𝗶𝗻𝗴 𝗛𝗶𝗴𝗵-𝗣𝗿𝗼𝗯𝗮𝗯𝗶𝗹𝗶𝘁𝘆 𝗦𝗲𝘁𝘂𝗽...',
+          visibleSteps,
           { chat_id: chatId, message_id: loadMsg.message_id, parse_mode: 'Markdown' }
         );
       } catch (e) {}
@@ -364,7 +376,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
 
       if (signal.notAChart) {
         try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
-        // ✅ পরিবর্তিত — Invalid Chart
         await bot.sendMessage(chatId,
           '⚠️ 𝗜𝗻𝘃𝗮𝗹𝗶𝗱 𝗖𝗵𝗮𝗿𝘁!\n\n' +
           '📸 𝗣𝗹𝗲𝗮𝘀𝗲 𝘂𝗽𝗹𝗼𝗮𝗱 𝗮 𝗰𝗹𝗲𝗮𝗿 𝗤𝘂𝗼𝘁𝗲𝘅 𝗖𝗵𝗮𝗿𝘁 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁',
@@ -379,7 +390,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         await incrementTrialScreenshot(userId);
         const left = getTrialScreenshotLeft(userId);
         if (left === 0) {
-          // ✅ পরিবর্তিত — Last Free Trial Screenshot
           await bot.sendMessage(chatId,
             '⚠️ 𝗟𝗮𝘀𝘁 𝗙𝗿𝗲𝗲 𝗧𝗿𝗶𝗮𝗹 𝗦𝗰𝗿𝗲𝗲𝗻𝘀𝗵𝗼𝘁!\n\n' +
             '🔓 𝗩𝗲𝗿𝗶𝗳𝘆 𝘆𝗼𝘂𝗿 𝗮𝗰𝗰𝗼𝘂𝗻𝘁 𝘁𝗼 𝘂𝗻𝗹𝗼𝗰𝗸 𝗨𝗻𝗹𝗶𝗺𝗶𝘁𝗲𝗱 𝗔𝗰𝗰𝗲𝘀𝘀.',
@@ -403,7 +413,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
 
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (e) {}
 
-      // ✅ পরিবর্তিত — চূড়ান্ত সিগন্যাল রেজাল্ট মেসেজ
       const sentMsg = await bot.sendMessage(chatId,
         '╔════════════════════╗\n' +
         '🧠 𝗔𝗜 𝗖𝗛𝗔𝗥𝗧 𝗔𝗡𝗔𝗟𝗬𝗦𝗜𝗦\n' +
@@ -432,8 +441,11 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       clearInterval(countdownInterval);
       console.log('ERROR:', e.message);
       try { await bot.deleteMessage(chatId, loadMsg.message_id); } catch (err) {}
+      // ✅ পরিবর্তিত — error catch মেসেজ
       await bot.sendMessage(chatId,
-        '❌ Analysis failed!\n\n➕ *Generate New Signal 📊* বাটন দিয়ে signal নিন।',
+        '⚠️ 𝗢𝗼𝗽𝘀! 𝗦𝗼𝗿𝗿𝘆 𝘀𝗼𝗺𝗲𝘁𝗵𝗶𝗻𝗴 𝘄𝗲𝗻𝘁 𝘄𝗿𝗼𝗻𝗴 𝘄𝗵𝗶𝗹𝗲 𝗮𝗻𝗮𝗹𝘆𝘇𝗶𝗻𝗴 𝘁𝗵𝗲 𝗰𝗵𝗮𝗿𝘁.\n\n' +
+        '🔄 𝗣𝗹𝗲𝗮𝘀𝗲 𝘁𝗿𝘆 𝗮𝗴𝗮𝗶𝗻 𝗶𝗻 𝗮 𝗳𝗲𝘄 𝘀𝗲𝗰𝗼𝗻𝗱𝘀.\n\n' +
+        '➕ Tap 𝗚𝗲𝗻𝗲𝗿𝗮𝘁𝗲 𝗔𝗜 𝗦𝗶𝗴𝗻𝗮𝗹 📊',
         { parse_mode: 'Markdown' }
       );
     }
