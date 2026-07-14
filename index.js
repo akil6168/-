@@ -1273,7 +1273,7 @@ async function generateSignalForPair(chatId, userId, pair) {
       '╭──────────────────╮\n│    📈 *𝗤𝘅 𝘅𝗮𝗮𝗻 𝗙𝗮𝘁𝗵𝗲𝗿 𝗯𝗼𝘁*\n╰──────────────────╯\n\n' +
       '📊 *ASSET*  ➜ `' + pair + '`\n🔹 *TIME*     ➜ `1 MIN`\n🕒 *𝗘𝗡𝗧𝗥𝗬* ➜ `' + entryDisplayTime + '`\n══════════════════\n' +
       '🚀 *DIRECTION* ➜ ' + signal.direction + '\n♻️ *WIN RATE*   ➜ `' + signal.winRate + '`\n✅ *CONFIDENCE* ➜ ' + signal.confidence + '\n══════════════════\n' +
-      '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 1 stet MTG_ ⚠️' + trialInfo,
+      '⏹️ *Take the trade now!*\n⚠️ _Trade at your own risk if loss use 𝟭 𝗦𝗧𝗘𝗣 𝗠𝗧𝗚 never over trade_ ⚠️' + trialInfo,
       {
         parse_mode: 'Markdown',
         reply_markup: signalInlineKeyboard
