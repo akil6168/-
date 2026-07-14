@@ -1,22 +1,48 @@
-// twelvedata.js - Shared TwelveData API client with key rotation
-// Loads all TWELVE_DATA_KEY / TWELVE_DATA_KEY_1 ... _9 env vars and
-// round-robins between them so a single key never eats the whole
-// rate limit (8 req/min, 800 req/day per free-tier key).
+// twelvedata.js - Shared TwelveData API client with DYNAMIC key rotation
+// এই ফাইল Railway env var থেকে TWELVE_DATA_KEY_11, TWELVE_DATA_KEY_12, ...
+// TWELVE_DATA_KEY_N (যত ইচ্ছা তত!) — সব automatically scan করে নেয়।
+// নতুন key add করতে চাইলে শুধু Railway Variables-এ TWELVE_DATA_KEY_<পরের নাম্বার>
+// বসিয়ে দিলেই হবে, কোডে হাত দেওয়ার দরকার নেই।
+//
+// ⚠️ IMPORTANT: শুধুমাত্র _11 এবং তার পরের নাম্বারগুলো (_11, _12, _13, ...) এই
+// ফাইলে ব্যবহার হয়। TWELVE_DATA_KEY_1 থেকে TWELVE_DATA_KEY_10 (এবং bare
+// TWELVE_DATA_KEY) অন্য একটা ফাংশন/মডিউল ব্যবহার করে — সেগুলো ইচ্ছাকৃতভাবে
+// এখানে বাদ দেওয়া হয়েছে, যাতে দুইটা সিস্টেম মিশে না যায়।
 
 const https = require('https');
 
-const KEYS = [
-  process.env.TWELVE_DATA_KEY_11,
-  process.env.TWELVE_DATA_KEY_12,
-  process.env.TWELVE_DATA_KEY_13,
-  process.env.TWELVE_DATA_KEY_14,
-  process.env.TWELVE_DATA_KEY_15,
-].filter(Boolean);
+const MIN_KEY_INDEX = 11; // এর নিচের নাম্বারগুলো (1-10) স্কিপ হবে
+
+function loadKeysFromEnv() {
+  const pattern = /^TWELVE_DATA_KEY_(\d+)$/;
+  const found = [];
+
+  for (const envName of Object.keys(process.env)) {
+    const match = envName.match(pattern);
+    if (!match) continue;
+
+    const index = parseInt(match[1], 10);
+    if (index < MIN_KEY_INDEX) continue; // 1-10 skip — অন্য ফাংশনের জন্য সংরক্ষিত
+
+    const value = process.env[envName];
+    if (value && value.trim()) {
+      found.push({ index, key: value.trim(), envName });
+    }
+  }
+
+  // নাম্বার অনুযায়ী sort করা হচ্ছে যাতে rotation ধারাবাহিক (predictable) থাকে
+  found.sort((a, b) => a.index - b.index);
+  return found;
+}
+
+const loadedKeys = loadKeysFromEnv();
+const KEYS = loadedKeys.map(k => k.key);
 
 if (KEYS.length === 0) {
-  console.warn('⚠️ কোনো TWELVE_DATA_KEY* env var পাওয়া যায়নি! API calls fail হবে।');
+  console.warn(`⚠️ কোনো TWELVE_DATA_KEY_${MIN_KEY_INDEX}+ env var পাওয়া যায়নি! API calls fail হবে।`);
 } else {
-  console.log(`✅ TwelveData key rotation চালু — মোট ${KEYS.length}টা key লোড হয়েছে।`);
+  const names = loadedKeys.map(k => k.envName).join(', ');
+  console.log(`✅ TwelveData key rotation চালু — মোট ${KEYS.length}টা key লোড হয়েছে (${names})`);
 }
 
 // per-key cooldown tracking (timestamp until which a key should be skipped)
@@ -54,7 +80,7 @@ function fetchJSON(url) {
 
 // পুরো KEYS list এ round-robin ভাবে চেষ্টা করবো, rate-limit পেলে পরের key তে যাবো
 async function callWithRotation(buildUrl, maxAttempts) {
-  if (KEYS.length === 0) throw new Error('No TwelveData API key configured');
+  if (KEYS.length === 0) throw new Error(`No TwelveData API key configured (need TWELVE_DATA_KEY_${MIN_KEY_INDEX} or higher)`);
   const attempts = maxAttempts || KEYS.length;
   let lastErr;
 
