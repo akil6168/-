@@ -1,4 +1,4 @@
-// v23 - Free Trial + Direct Affiliate Verify + Fixed Real Candle-Based Result Tracking
+// v23 - Free Trial(3) + Deposit-Based Affiliate Verify + XAdmin Test Panel + Real Candle-Based Result Tracking
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
@@ -44,8 +44,9 @@ process.on('uncaughtException', (err) => {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 const ADMIN_ID = 5724602667;
-const FREE_TRIAL_SIGNAL = 5;
-const FREE_TRIAL_SCREENSHOT = 5;
+const FREE_TRIAL_SIGNAL = 3;
+const FREE_TRIAL_SCREENSHOT = 3;
+const MIN_DEPOSIT_USD = 10; // ✅ নতুন — verify হতে হলে ন্যূনতম এই পরিমাণ deposit লাগবে
 
 let maintenanceMode = false;
 
@@ -66,6 +67,14 @@ const delAffiliateMode = new Set();
 const messageUserMode = new Set();
 const pendingMessageTarget = new Map();
 
+// ✅ নতুন — /xadmin টেস্ট প্যানেলের জন্য state
+const xadminRegMode = new Set();
+const xadminDepositMode = new Set();
+const xadminCheckMode = new Set();
+const xadminResetMode = new Set();
+const xadminTrialResetMode = new Set();
+const xadminForceApproveMode = new Set();
+
 let sessionModule;
 const lastSignalMsgId = new Map();
 
@@ -84,6 +93,7 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 let dailyStats = { dateKey: null, activeUsers: new Set(), totalSignals: 0, directWin: 0, mtgWin: 0, loss: 0 };
 const userDailyStats = new Map();
 let lastReportDateKey = null;
+let resultRestActive = false;
 
 function currentBDDateKey() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
@@ -129,6 +139,7 @@ function getUserStats(userId) {
   return userDailyStats.get(userId);
 }
 
+// ✅ পরিবর্তিত — Win Rate যোগ করা হয়েছে
 function buildDailyAdminReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentBDDateKey());
   const totalCompleted = dailyStats.directWin + dailyStats.mtgWin + dailyStats.loss;
@@ -166,12 +177,7 @@ function buildDailyAdminReport() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ FIXED — Real Candle-Based Result Tracking
-// মূল fix: candle খোঁজা শুরুর আগে candle close (+buffer) পর্যন্ত wait করা হয়,
-// তারপর একবারেই fetch/retry করে সেই একই candle থেকে open ও close দুটোই নেওয়া হয়।
-// আগে candle close হওয়ার আগেই fetch attempt শুরু হতো, ফলে retry window নষ্ট হয়ে
-// অনেক signal-এর result silently miss হয়ে যেত। এখন retry window পুরোটাই
-// candle close হওয়ার *পরে* কাজে লাগে।
+// ✅ Real Candle-Based Result Tracking (getCurrentPrice/live price ব্যবহার হয় না)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function formatUTCDateTime(d) {
@@ -183,8 +189,7 @@ function parseUTCDatetimeStr(str) {
   return new Date(str + ' UTC');
 }
 
-// candle close হওয়ার পর এটা কল করা হয় — তাই এখন attempts/interval বাড়ানো নিরাপদ ও কার্যকর
-async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 10, intervalMs = 6000) {
+async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 6, intervalMs = 5000) {
   for (let i = 0; i < maxAttempts; i++) {
     try {
       const candles = await getCandles(symbol);
@@ -214,25 +219,24 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
   dailyStats.totalSignals++;
 
   try {
-    const entryDate = parseUTCDatetimeStr(entryDatetimeStr);
-
-    // ━━━ ধাপ ১ — Entry candle সম্পূর্ণ close হওয়া পর্যন্ত অপেক্ষা (close + 5s buffer) ━━━
-    const waitUntilEntryClose = entryDate.getTime() + 65 * 1000 - Date.now();
-    if (waitUntilEntryClose > 0) await sleep(waitUntilEntryClose);
-    if (!isRealMarketOpen()) return;
-
-    // ━━━ ধাপ ২ — Close হওয়ার পর ফাইনাল candle fetch (open ও close একসাথে পাওয়া যায়) ━━━
     const entryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr);
     if (!entryCandle) {
       console.log(`⚠️ Entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
-      saveSignalRecord({
-        userId, symbol, direction, entryTime: entryDisplayTime, entryPrice: null,
-        directResult: null, mtgResult: null, finalResult: 'UNKNOWN', createdAt: new Date()
-      });
       return;
     }
     const entryOpen = entryCandle.open;
-    const entryClose = entryCandle.close;
+
+    const entryDate = parseUTCDatetimeStr(entryDatetimeStr);
+    const waitUntilClose = entryDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilClose > 0) await sleep(waitUntilClose);
+    if (!isRealMarketOpen()) return;
+
+    const closedEntryCandle = await waitForCandleByDatetime(symbol, entryDatetimeStr, 6, 5000);
+    if (!closedEntryCandle) {
+      console.log(`⚠️ Closed entry candle পাওয়া যায়নি: ${symbol} @ ${entryDatetimeStr}`);
+      return;
+    }
+    const entryClose = closedEntryCandle.close;
 
     const isDirectWin = direction === 'UP⏫' ? entryClose > entryOpen : entryClose < entryOpen;
 
@@ -247,18 +251,11 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
       return;
     }
 
-    // ━━━ ধাপ ৩ — Direct Loss হলে silent MTG (কোনো user notification নেই) ━━━
     console.log(`⚠️ Direct Loss (silent) — MTG শুরু হচ্ছে: user ${userId} | ${symbol}`);
 
     const mtgDate = new Date(entryDate.getTime() + 60 * 1000);
     const mtgDatetimeStr = formatUTCDateTime(mtgDate);
 
-    // ━━━ ধাপ ৪ — MTG candle সম্পূর্ণ close হওয়া পর্যন্ত অপেক্ষা ━━━
-    const waitUntilMtgClose = mtgDate.getTime() + 65 * 1000 - Date.now();
-    if (waitUntilMtgClose > 0) await sleep(waitUntilMtgClose);
-    if (!isRealMarketOpen()) return;
-
-    // ━━━ ধাপ ৫ — Close হওয়ার পর ফাইনাল MTG candle fetch ━━━
     const mtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr);
     if (!mtgCandle) {
       console.log(`⚠️ MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
@@ -269,9 +266,18 @@ async function trackSignalResult(userId, symbol, direction, entryDatetimeStr, en
       return;
     }
     const mtgOpen = mtgCandle.open;
-    const mtgClose = mtgCandle.close;
 
-    // ━━━ ধাপ ৬ — MTG result (Max 1 MTG, এরপর final) ━━━
+    const waitUntilMtgClose = mtgDate.getTime() + 65 * 1000 - Date.now();
+    if (waitUntilMtgClose > 0) await sleep(waitUntilMtgClose);
+    if (!isRealMarketOpen()) return;
+
+    const closedMtgCandle = await waitForCandleByDatetime(symbol, mtgDatetimeStr, 6, 5000);
+    if (!closedMtgCandle) {
+      console.log(`⚠️ Closed MTG candle পাওয়া যায়নি: ${symbol} @ ${mtgDatetimeStr}`);
+      return;
+    }
+    const mtgClose = closedMtgCandle.close;
+
     const isMtgWin = direction === 'UP⏫' ? mtgClose > mtgOpen : mtgClose < mtgOpen;
 
     if (isMtgWin) {
@@ -630,14 +636,14 @@ bot.onText(/\/maintenance (.+)/, async (msg, match) => {
     await bot.sendMessage(ADMIN_ID, '🔧 *Maintenance Mode চালু হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try { await bot.sendMessage(uid, '⚠️ The bot is currently under maintenance. Please wait while we complete the process...', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-on) fail for', uid, e.message); }
+      try { await bot.sendMessage(uid, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-on) fail for', uid, e.message); }
     }
   } else if (action === 'off') {
     maintenanceMode = false;
     await bot.sendMessage(ADMIN_ID, '✅ *Maintenance Mode বন্ধ হয়েছে!*', { parse_mode: 'Markdown' });
     for (const uid of startedUsers) {
       if (uid === ADMIN_ID) continue;
-      try { await bot.sendMessage(uid, '✅ System update completed successfully. All services are now available', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-off) fail for', uid, e.message); }
+      try { await bot.sendMessage(uid, '✅ *Bot আবার চালু হয়েছে!*\n\n📊 Signal নিতে নিচের বাটনে ক্লিক করুন।', { parse_mode: 'Markdown' }); } catch (e) { console.error('broadcast(maintenance-off) fail for', uid, e.message); }
     }
   } else {
     await bot.sendMessage(ADMIN_ID, '❌ Format: /maintenance on অথবা /maintenance off');
@@ -652,7 +658,7 @@ bot.onText(/\/start/, async (msg) => {
   const usernameHandle = msg.from.username || null;
 
   if (userId !== ADMIN_ID && maintenanceMode) {
-    await bot.sendMessage(chatId, '⚠️ The bot is currently under maintenance. Please wait while we complete the process...', { parse_mode: 'Markdown' });
+    await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
   }
   if (bannedUsers.has(userId)) {
@@ -779,7 +785,29 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// /approve
+// ✅ নতুন — /xadmin টেস্ট প্যানেল
+bot.onText(/\/xadmin/, async (msg) => {
+  if (msg.from.id !== ADMIN_ID) return;
+  await bot.sendMessage(ADMIN_ID,
+    '🧪 *𝗫𝗔𝗗𝗠𝗜𝗡 — 𝗧𝗘𝗦𝗧 𝗣𝗔𝗡𝗘𝗟*\n══════════════════\n' +
+    'এখানে বাস্তব postback/deposit ছাড়াই সব টেস্ট করা যাবে।',
+    {
+      parse_mode: 'Markdown',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '📝 Simulate Registration', callback_data: 'xadmin_reg' }],
+          [{ text: '💰 Simulate Deposit', callback_data: 'xadmin_deposit' }],
+          [{ text: '🔍 Check Trader Status', callback_data: 'xadmin_check' }],
+          [{ text: '🗑️ Reset Trader Test Data', callback_data: 'xadmin_reset' }],
+          [{ text: '🔄 Reset User Trial Count', callback_data: 'xadmin_trial_reset' }],
+          [{ text: '⚡ Force Approve User', callback_data: 'xadmin_force_approve' }]
+        ]
+      }
+    }
+  );
+});
+
+// /approve — এখনো manual override হিসেবে available (edge case handling)
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
@@ -848,7 +876,7 @@ bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   }
 });
 
-// /delaffiliate
+// /delaffiliate — affiliateVerified কালেকশন থেকে একটা traderId এন্ট্রি মুছে ফেলা (টেস্ট/ভুল এন্ট্রি cleanup এর জন্য)
 bot.onText(/\/delaffiliate (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const traderId = match[1].trim();
@@ -976,6 +1004,111 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ নতুন — /xadmin টেস্ট প্যানেলের মেসেজ হ্যান্ডলার
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  if (xadminRegMode.has(userId) && userId === ADMIN_ID) {
+    xadminRegMode.delete(userId);
+    const traderId = text.trim();
+    await db.collection('affiliateVerified').updateOne(
+      { traderId },
+      { $set: { traderId, registered: true, isTest: true, receivedAt: new Date() } },
+      { upsert: true }
+    );
+    await bot.sendMessage(ADMIN_ID, '✅ Test Registration সেট করা হলো!\n\n📌 Trader ID: `' + traderId + '`\n🧪 (isTest flag সহ সেভ হয়েছে)', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (xadminDepositMode.has(userId) && userId === ADMIN_ID) {
+    xadminDepositMode.delete(userId);
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 2 || isNaN(parseFloat(parts[1]))) {
+      await bot.sendMessage(ADMIN_ID, '❌ ভুল ফরম্যাট। এভাবে পাঠাও: `12345678 15`', { parse_mode: 'Markdown' });
+      return;
+    }
+    const traderId = parts[0];
+    const amount = parseFloat(parts[1]);
+    const existing = await db.collection('affiliateVerified').findOne({ traderId });
+    const newTotal = (existing && existing.depositAmount ? existing.depositAmount : 0) + amount;
+    const verified = newTotal >= MIN_DEPOSIT_USD;
+    await db.collection('affiliateVerified').updateOne(
+      { traderId },
+      { $set: { traderId, registered: true, depositAmount: newTotal, verified, isTest: true, depositAt: new Date() } },
+      { upsert: true }
+    );
+    await bot.sendMessage(ADMIN_ID,
+      '✅ Test Deposit যোগ করা হলো!\n\n📌 Trader ID: `' + traderId + '`\n💰 Total Deposit: $' + newTotal.toFixed(2) + '\n' +
+      (verified ? '🟢 Verified ✅ (এখন এই Trader ID দিয়ে /verify করলে approve হবে)' : '🟡 এখনো $' + MIN_DEPOSIT_USD + ' এর কম'),
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (xadminCheckMode.has(userId) && userId === ADMIN_ID) {
+    xadminCheckMode.delete(userId);
+    const traderId = text.trim();
+    const rec = await db.collection('affiliateVerified').findOne({ traderId });
+    if (!rec) {
+      await bot.sendMessage(ADMIN_ID, '⚠️ এই Trader ID `' + traderId + '` এর কোনো ডেটা পাওয়া যায়নি।', { parse_mode: 'Markdown' });
+      return;
+    }
+    await bot.sendMessage(ADMIN_ID,
+      '🔍 *𝗧𝗥𝗔𝗗𝗘𝗥 𝗦𝗧𝗔𝗧𝗨𝗦*\n\n' +
+      '📌 Trader ID: `' + rec.traderId + '`\n' +
+      '📝 Registered: ' + (rec.registered ? '✅' : '❌') + '\n' +
+      '💰 Deposit: $' + (rec.depositAmount ? rec.depositAmount.toFixed(2) : '0.00') + '\n' +
+      '🎯 Verified: ' + (rec.verified ? '✅' : '❌') + '\n' +
+      (rec.isTest ? '🧪 Test Entry\n' : '') +
+      '🌍 Country: ' + (rec.country || 'N/A') + '\n' +
+      '📊 Last Status: ' + (rec.lastStatus || 'N/A'),
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (xadminResetMode.has(userId) && userId === ADMIN_ID) {
+    xadminResetMode.delete(userId);
+    const traderId = text.trim();
+    const result = await db.collection('affiliateVerified').deleteOne({ traderId });
+    await bot.sendMessage(ADMIN_ID,
+      result.deletedCount > 0
+        ? '✅ Test data মুছে ফেলা হয়েছে।\n\n📌 Trader ID: `' + traderId + '`'
+        : '⚠️ এই Trader ID পাওয়া যায়নি।',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (xadminTrialResetMode.has(userId) && userId === ADMIN_ID) {
+    xadminTrialResetMode.delete(userId);
+    const targetId = parseInt(text.trim());
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+    trialSignalCount.set(targetId, 0);
+    trialScreenshotCount.set(targetId, 0);
+    await db.collection('trialCounts').updateOne(
+      { userId: targetId }, { $set: { userId: targetId, signalCount: 0, screenshotCount: 0 } }, { upsert: true }
+    );
+    await bot.sendMessage(ADMIN_ID, '✅ Trial count reset করা হয়েছে!\n\n🆔 User ID: `' + targetId + '`\n📈 Signal: 0/' + FREE_TRIAL_SIGNAL + '\n📸 Screenshot: 0/' + FREE_TRIAL_SCREENSHOT, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (xadminForceApproveMode.has(userId) && userId === ADMIN_ID) {
+    xadminForceApproveMode.delete(userId);
+    const targetId = parseInt(text.trim());
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+    const apiKey = generateApiKey();
+    passwordMode.set(targetId, apiKey);
+    try {
+      await bot.sendMessage(targetId,
+        '✅ 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝗛𝗮𝘀 𝗕𝗲𝗲𝗻 𝗩𝗲𝗿𝗶𝗳𝗶𝗲𝗱!\n\n🔐 𝗘𝗻𝘁𝗲𝗿 𝗬𝗼𝘂𝗿 𝗔𝗣𝗜 𝗞𝗲𝘆\n\n🔑 𝗔𝗣𝗜 𝗞𝗘𝗬:\n`' + apiKey + '`',
+        { parse_mode: 'Markdown' }
+      );
+    } catch (e) { console.error('xadmin force-approve notify fail:', e.message); }
+    await bot.sendMessage(ADMIN_ID, '✅ Test Force Approve — API key পাঠানো হয়েছে (deposit ছাড়াই)।\n\n🆔 User: `' + targetId + '`\n🔑 Key: `' + apiKey + '`', { parse_mode: 'Markdown' });
+    return;
+  }
+
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
@@ -1014,10 +1147,41 @@ bot.on('message', async (msg) => {
 
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
-  if (affRecord) {
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ পরিবর্তিত — এখন শুধু registration যথেষ্ট না, deposit ≥ MIN_DEPOSIT_USD ও লাগবে
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  if (affRecord && affRecord.registered) {
+    const totalDeposit = affRecord.depositAmount || 0;
+
+    if (totalDeposit < MIN_DEPOSIT_USD) {
+      await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), pendingDeposit: true });
+      await bot.sendMessage(chatId,
+        '✅ 𝗥𝗲𝗴𝗶𝘀𝘁𝗿𝗮𝘁𝗶𝗼𝗻 𝗦𝘂𝗰𝗰𝗲𝘀𝘀𝗳𝘂𝗹!\n\n' +
+        '⚠️ 𝗗𝗲𝗽𝗼𝘀𝗶𝘁 𝗥𝗲𝗾𝘂𝗶𝗿𝗲𝗱\n\n' +
+        '💰 আপনার বর্তমান Deposit: $' + totalDeposit.toFixed(2) + '\n' +
+        '🎯 ন্যূনতম প্রয়োজন: $' + MIN_DEPOSIT_USD + '\n\n' +
+        '📌 আপনার Quotex অ্যাকাউন্টে কমপক্ষে $' + MIN_DEPOSIT_USD + ' ডিপোজিট করুন, তারপর আপনার Trader ID আবার পাঠান।',
+        {
+          parse_mode: 'Markdown',
+          reply_markup: {
+            inline_keyboard: [
+              [{ text: '✅ 𝗩𝗲𝗿𝗶𝗳𝘆 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 (𝗔𝗴𝗮𝗶𝗻)', callback_data: '/verify' }]
+            ]
+          }
+        }
+      );
+      await bot.sendMessage(ADMIN_ID,
+        '⏳ *Registered কিন্তু Deposit বাকি*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n💰 Deposit: $' + totalDeposit.toFixed(2),
+        { parse_mode: 'Markdown' }
+      );
+      return;
+    }
+
+    // registered + deposit থ্রেশহোল্ড পার — ফুল ভেরিফাই
     const apiKey = generateApiKey();
     passwordMode.set(userId, apiKey);
-    await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), autoVerified: true });
+    await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), autoVerified: true, depositAmount: totalDeposit });
     await bot.sendMessage(chatId,
       '✅ 𝗬𝗼𝘂𝗿 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 𝗛𝗮𝘀 𝗕𝗲𝗲𝗻 𝗩𝗲𝗿𝗶𝗳𝗶𝗲𝗱!\n\n' +
       '🔐 𝗘𝗻𝘁𝗲𝗿 𝗬𝗼𝘂𝗿 𝗔𝗣𝗜 𝗞𝗲𝘆\n\n' +
@@ -1025,12 +1189,15 @@ bot.on('message', async (msg) => {
       { parse_mode: 'Markdown' }
     );
     await bot.sendMessage(ADMIN_ID,
-      '⚡ *New Affiliate User*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`',
+      '⚡ *New Affiliate User (Deposit Verified)*\n\n👤 Name: ' + username + '\n🆔 User ID: `' + userId + '`\n📌 Trader ID: `' + text + '`\n💰 Deposit: $' + totalDeposit.toFixed(2),
       { parse_mode: 'Markdown' }
     );
     return;
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ ভুল/না-মেলা Trader ID হলে সরাসরি ইউজারকে জানানো
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(chatId,
@@ -1225,7 +1392,7 @@ bot.on('callback_query', async (query) => {
     if (affList.length === 0) { await bot.sendMessage(ADMIN_ID, '⚡ কোনো affiliate postback পাওয়া যায়নি এখনো।'); return; }
     let text = '⚡ *AFFILIATE VERIFIED (সর্বশেষ 30)*\n\n';
     affList.forEach((a, i) => {
-      text += (i + 1) + '. 📌 Trader ID: `' + a.traderId + '`\n📊 Status: `' + (a.status || 'unknown') + '`\n\n';
+      text += (i + 1) + '. 📌 Trader ID: `' + a.traderId + '`\n📝 Registered: ' + (a.registered ? '✅' : '❌') + '\n💰 Deposit: $' + (a.depositAmount ? a.depositAmount.toFixed(2) : '0.00') + '\n🎯 Verified: ' + (a.verified ? '✅' : '❌') + '\n\n';
     });
     await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
     return;
@@ -1320,6 +1487,46 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ নতুন — /xadmin টেস্ট প্যানেলের callback হ্যান্ডলার
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  if (pair === 'xadmin_reg' && userId === ADMIN_ID) {
+    xadminRegMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '📝 যে Trader ID এর জন্য registration সিমুলেট করতে চাও, সেটা পাঠাও:');
+    return;
+  }
+
+  if (pair === 'xadmin_deposit' && userId === ADMIN_ID) {
+    xadminDepositMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '💰 এই ফরম্যাটে পাঠাও: `TraderID Amount`\n\nউদাহরণ: `12345678 15`', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'xadmin_check' && userId === ADMIN_ID) {
+    xadminCheckMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🔍 যে Trader ID এর status চেক করতে চাও সেটা পাঠাও:');
+    return;
+  }
+
+  if (pair === 'xadmin_reset' && userId === ADMIN_ID) {
+    xadminResetMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🗑️ যে Trader ID এর test data মুছতে চাও সেটা পাঠাও:');
+    return;
+  }
+
+  if (pair === 'xadmin_trial_reset' && userId === ADMIN_ID) {
+    xadminTrialResetMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🔄 যে User ID এর trial count reset করতে চাও (নতুন করে trial টেস্ট করার জন্য) সেটা পাঠাও:');
+    return;
+  }
+
+  if (pair === 'xadmin_force_approve' && userId === ADMIN_ID) {
+    xadminForceApproveMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '⚡ যে User ID কে সরাসরি (deposit ছাড়াই, শুধু টেস্টের জন্য) approve করতে চাও সেটা পাঠাও:');
+    return;
+  }
+
   if (pair === '/verify') {
     verifyMode.add(userId);
     await bot.sendMessage(chatId, '🔐 𝗣𝗹𝗲𝗮𝘀𝗲 𝗦𝗲𝗻𝗱 𝗬𝗼𝘂𝗿 𝟴-𝗗𝗶𝗴𝗶𝘁 𝗤𝘂𝗼𝘁𝗲𝘅 𝗧𝗿𝗮𝗱𝗲𝗿 𝗜𝗗 👇', { parse_mode: 'Markdown' });
@@ -1375,26 +1582,56 @@ setInterval(async () => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// ✅ পরিবর্তিত — এখন registration আর deposit আলাদা status হিসেবে হ্যান্ডল করা হচ্ছে
 app.get('/postback', async (req, res) => {
   try {
-    const { status, uid, eid, cid, lid, token } = req.query;
+    const { status, uid, eid, cid, sid, lid, country, sumdep, sumwithdraw, token } = req.query;
     console.log('📩 Postback received:', req.query);
 
+    // 🛡️ SECURITY PATCH — সঠিক secret token ছাড়া postback রিজেক্ট করা হচ্ছে
     if (token !== process.env.POSTBACK_SECRET) {
       console.log('🚫 Postback রিজেক্ট হলো — ভুল বা মিসিং token');
       res.status(403).send('Forbidden');
       return;
     }
 
-    if (uid && db) {
+    if (!uid || !db) {
+      console.log('⚠️ Postback received without uid or DB not ready');
+      res.status(200).send('OK');
+      return;
+    }
+
+    const traderId = String(uid);
+    // status যদি array হয়ে যায় (duplicate query key এর কারণে) তাহলে প্রথমটা নেওয়া হচ্ছে
+    const statusVal = String(Array.isArray(status) ? status[0] : (status || '')).toLowerCase();
+
+    if (statusVal === 'reg') {
       await db.collection('affiliateVerified').updateOne(
-        { traderId: String(uid) },
-        { $set: { traderId: String(uid), status: status || 'unknown', eventId: eid || null, receivedAt: new Date() } },
+        { traderId },
+        { $set: { traderId, registered: true, country: country || null, eventId: eid || null, receivedAt: new Date() } },
         { upsert: true }
       );
-      console.log(`✅ Trader ID ${uid} saved as affiliate-verified (status: ${status})`);
+      console.log(`✅ Trader ID ${traderId} — Registration saved`);
+    } else if (statusVal === 'dep') {
+      const depositAmt = sumdep ? parseFloat(Array.isArray(sumdep) ? sumdep[0] : sumdep) : 0;
+      const safeDeposit = isNaN(depositAmt) ? 0 : depositAmt;
+      const existing = await db.collection('affiliateVerified').findOne({ traderId });
+      const newTotal = (existing && existing.depositAmount ? existing.depositAmount : 0) + safeDeposit;
+      const verified = newTotal >= MIN_DEPOSIT_USD;
+      await db.collection('affiliateVerified').updateOne(
+        { traderId },
+        { $set: { traderId, registered: true, depositAmount: newTotal, verified, depositAt: new Date() } },
+        { upsert: true }
+      );
+      console.log(`💰 Trader ID ${traderId} — Deposit updated: $${newTotal} (verified: ${verified})`);
     } else {
-      console.log('⚠️ Postback received without uid or DB not ready');
+      // conf, withdrawal, অথবা অন্য কোনো status — শুধু log/save করা হচ্ছে, কোনো action নেই
+      await db.collection('affiliateVerified').updateOne(
+        { traderId },
+        { $set: { traderId, lastStatus: statusVal, receivedAt: new Date() } },
+        { upsert: true }
+      );
+      console.log(`ℹ️ Trader ID ${traderId} — status "${statusVal}" saved (no action needed)`);
     }
 
     res.status(200).send('OK');
@@ -1411,7 +1648,7 @@ app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT
 connectDB().then(() => {
   sessionModule = require('./session');
   sessionModule(bot);
-  console.log('Bot running v23 - Fixed Real Candle-Based Result Tracking...');
+  console.log('Bot running v23 - Deposit-Based Verify + XAdmin Test Panel + Real Candle-Based Result Tracking...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
   const newsModule = require('./news')(bot);
   require('./channel')(bot, newsModule);
