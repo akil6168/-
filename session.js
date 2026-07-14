@@ -1,4 +1,10 @@
-// session.js - Qx AI Predictor VIP Session (v8.0 - TradingView-style Chart + Streamlined Messages)
+// session.js - v9.0 - FIXED REAL CANDLE WORKFLOW
+// Step 1: Analysis Only
+// Step 2: Direction Sticker (xx:xx:45-50)
+// Step 3: Trade Start (xx:xx:00 - Next Candle Open)
+// Step 4: Result (xx:xx:59 - Next Candle Close)
+// Step 5: MTG or WIN
+
 const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
@@ -39,7 +45,7 @@ const MARKET_SESSIONS = {
 };
 
 const SESSION_INTRO_MESSAGE =
-  `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬**\n\n` +
+  `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬**\n\n` +
   `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
   `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
   `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
@@ -88,37 +94,14 @@ class PerformanceTracker {
       const rate = data.wins+data.losses > 0 ? (data.wins/(data.wins+data.losses)*100) : 0;
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
-    return `
-📊 **QX AI PERFORMANCE v8.0**
-
-━━━━━━━━━━━━━━━━━━━
-📈 **TOTAL**: ${total}
-✅ **WINS**: ${wins}
-❌ **LOSSES**: ${losses}
-🎯 **WIN RATE**: ${winRate.toFixed(1)}%
-🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})
-━━━━━━━━━━━━━━━━━━━
-
-📅 **TODAY**: ${daily.wins}W / ${daily.losses}L
-🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L
-
-📊 **TOP PAIRS**
-${pairStats || '  No data yet'}
-
-💎 **OWNER**: @AkiL_xD 👾
-    `;
+    return `📊 **QX AI PERFORMANCE v9.0**\n\n━━━━━━━━━━━━━━━━━━━\n📈 **TOTAL**: ${total}\n✅ **WINS**: ${wins}\n❌ **LOSSES**: ${losses}\n🎯 **WIN RATE**: ${winRate.toFixed(1)}%\n🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})\n━━━━━━━━━━━━━━━━━━━\n\n📅 **TODAY**: ${daily.wins}W / ${daily.losses}L\n🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L\n\n📊 **TOP PAIRS**\n${pairStats || '  No data yet'}\n\n💎 **OWNER**: @AkiL_xD 👾`;
   }
   getTodayStats() {
     const today = getBDTime().dateKey;
     const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
     const totalToday = daily.wins + daily.losses + daily.mtgWins + daily.mtgLosses;
     const rate = totalToday > 0 ? ((daily.wins + daily.mtgWins) / totalToday * 100) : 0;
-    return {
-      wins: daily.wins + daily.mtgWins,
-      losses: daily.losses + daily.mtgLosses,
-      total: totalToday, rate,
-      mtgWins: daily.mtgWins, mtgLosses: daily.mtgLosses
-    };
+    return { wins: daily.wins + daily.mtgWins, losses: daily.losses + daily.mtgLosses, total: totalToday, rate, mtgWins: daily.mtgWins, mtgLosses: daily.mtgLosses };
   }
 }
 
@@ -299,7 +282,7 @@ async function getCandles(symbol, count = 50, interval = '1min') {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 HIGH ACCURACY INDICATORS
+// 📈 INDICATORS (সব পুরনো indicators থাকছে)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
@@ -337,11 +320,7 @@ function calcADX(candles, period = 14) {
     const downMove = candles[i-1].low - candles[i].low;
     plusDM.push(upMove > downMove && upMove > 0 ? upMove : 0);
     minusDM.push(downMove > upMove && downMove > 0 ? downMove : 0);
-    tr.push(Math.max(
-      candles[i].high - candles[i].low,
-      Math.abs(candles[i].high - candles[i-1].close),
-      Math.abs(candles[i].low - candles[i-1].close)
-    ));
+    tr.push(Math.max(candles[i].high - candles[i].low, Math.abs(candles[i].high - candles[i-1].close), Math.abs(candles[i].low - candles[i-1].close)));
   }
   const sum = arr => arr.slice(-period).reduce((a,b) => a+b, 0);
   const trSum = sum(tr) || 1;
@@ -407,7 +386,7 @@ function calcSupportResistance(candles) {
 function calcCandlePattern(candles) {
   const len = candles.length;
   if (len < 3) return { pattern: 'No Pattern', dir: 'NEUTRAL', str: 0 };
-  const c = candles[len - 1], p = candles[len - 2], p2 = candles[len - 3];
+  const c = candles[len - 1], p = candles[len - 2];
   const body = Math.abs(c.close - c.open);
   const upWick = c.high - Math.max(c.close, c.open);
   const dnWick = Math.min(c.close, c.open) - c.low;
@@ -501,7 +480,6 @@ function calcChaikinMF(candles, period = 21) {
 
 async function analyzeSymbol(symbol, relaxed = false) {
   const candles = await getCandles(symbol, 52);
-  const h4Candles = await getCandles(symbol, 100, '5min');
 
   const rsi = calcRSI(candles);
   const macd = calcMACD(candles);
@@ -551,7 +529,6 @@ async function analyzeSymbol(symbol, relaxed = false) {
   const volatility = (atr / last) * 100;
 
   up += trend.up; dn += trend.dn;
-
   up += ichimoku.up; dn += ichimoku.dn;
 
   if (mfi < 20) { up += 3; signals.push(`MFI Oversold (${mfi.toFixed(0)})`); }
@@ -598,8 +575,7 @@ async function analyzeSymbol(symbol, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 TRADINGVIEW-STYLE CANDLESTICK CHART
-// (candlestick + EMA7/21 + Support/Resistance + RSI subplot + header + badge)
+// 📊 CHART GENERATION (QuickChart)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function formatChartTime(offsetMinutesFromNow) {
@@ -607,32 +583,23 @@ function formatChartTime(offsetMinutesFromNow) {
   return `${String(bd.getUTCHours()).padStart(2,'0')}:${String(bd.getUTCMinutes()).padStart(2,'0')}`;
 }
 
-/**
- * badgeType: 'CALL' | 'PUT' | 'SURESHOT' | null
- * subtitle: e.g. "CONFIDENCE 82% • LIVE MARKET" or "RESULT"
- */
 async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badgeType = null, subtitle = '') {
   try {
     const plotCandles = candles.slice(-30);
     const n = plotCandles.length;
     const timeLabels = plotCandles.map((_, i) => formatChartTime(n - 1 - i));
 
-    // ✅ ফিক্স: candlestick ডেটাতে numeric x (index) ব্যবহার করলে Chart.js
-    // financial প্লাগইন সেটাকে timestamp (1970...) ধরে ফেলে। তাই label-এর index
-    // ব্যবহার করছি এবং x-axis টাইপ 'category' রাখছি (labels থেকে সরাসরি টাইম আসবে)।
     const ohlcData = plotCandles.map((c, i) => ({ x: i, o: c.open, h: c.high, l: c.low, c: c.close }));
     const ema7Series = calcEMASeries(plotCandles, 7);
     const ema21Series = calcEMASeries(plotCandles, 21);
     const sr = calcSupportResistance(candles);
 
-    // RSI (14) প্রতিটা candle পয়েন্টে
     const rsiPoints = [];
     for (let i = 0; i < plotCandles.length; i++) {
       const sliceEnd = candles.length - plotCandles.length + i + 1;
       const slice = candles.slice(0, sliceEnd);
       rsiPoints.push(slice.length >= 15 ? calcRSI(slice) : 50);
     }
-    const lastRsi = rsiPoints[rsiPoints.length - 1];
 
     const annotations = {
       supportLine: {
@@ -654,6 +621,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
         label: { content: `ENTRY ${entryPrice.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'transparent', color: '#fff', font: { size: 10 } }
       };
     }
+
     if (exitPrice && entryPrice) {
       const isWin = exitPrice > entryPrice;
       annotations.exitLine = {
@@ -663,7 +631,6 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
       };
     }
 
-    // ━━━ উপরে ডান কোণায় badge (CALL/PUT/SURESHOT) ━━━
     if (badgeType) {
       const badgeColors = {
         CALL: { border: '#00c896', bg: 'rgba(0,200,150,0.15)' },
@@ -689,7 +656,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
     }
 
     const titleText = symbol;
-    const subtitleText = subtitle || `M1  •  ${getBDTime().fullTime} (UTC+6)  •  AI Engine v5.0`;
+    const subtitleText = subtitle || `M1 • ${getBDTime().fullTime} (UTC+6) • AI Engine v9.0`;
 
     const chartConfig = {
       type: 'candlestick',
@@ -755,10 +722,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
             stack: 'panels', stackWeight: 1,
             min: 0, max: 100,
             ticks: { color: '#999', font: { size: 9 }, stepSize: 30 },
-            grid: { color: 'rgba(255,255,255,0.04)' },
-            afterFit: (scale) => {
-              // RSI last value ছোট লেবেল হিসেবে ডানে দেখানো
-            }
+            grid: { color: 'rgba(255,255,255,0.04)' }
           }
         }
       }
@@ -828,50 +792,71 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ CANDLE TIMING
+// ⏰ TIMING FUNCTIONS (CRITICAL)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function waitForExactSecond(targetSecond) {
+// Step 2: Direction এর আগে (xx:xx:45-50)
+function waitForDirectionTime() {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s === targetSecond) { clearInterval(check); resolve(); }
-    }, 100);
-    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
+      if (s >= 45 && s <= 50) { clearInterval(check); resolve(); }
+    }, 200);
+    setTimeout(() => { clearInterval(check); resolve(); }, 65000);
   });
 }
 
+// Step 3: পরের Candle open (xx:xx:00-01)
+function waitForCandleOpen() {
+  return new Promise(resolve => {
+    const check = setInterval(() => {
+      const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
+      const s = now.getUTCSeconds();
+      if (s <= 1) { clearInterval(check); resolve(); }
+    }, 200);
+    setTimeout(() => { clearInterval(check); resolve(); }, 65000);
+  });
+}
+
+// Step 4: Candle close (xx:xx:58-59)
 function waitForCandleClose() {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
       if (s >= 58) { clearInterval(check); resolve(); }
-    }, 500);
-    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
-  });
-}
-
-function waitForNewCandle() {
-  return new Promise(resolve => {
-    const check = setInterval(() => {
-      const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
-      const s = now.getUTCSeconds();
-      if (s === 0 || s === 1) { clearInterval(check); resolve(); }
-    }, 500);
-    setTimeout(() => { clearInterval(check); resolve(); }, 30000);
+    }, 200);
+    setTimeout(() => { clearInterval(check); resolve(); }, 65000);
   });
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 SIGNAL MESSAGE BUILDERS
+// 🎯 MESSAGE BUILDERS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-function buildSignalCaption(signal, flag, entryPrice, entryTimeStr) {
+// STEP 1: Analysis Message (Direction ছাড়া, Entry Price ছাড়া)
+function buildAnalysisCaption(signal, flag) {
   return (
     `╔════════════════════╗\n` +
-    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟱.𝟬\n` +
+    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬\n` +
+    `╚════════════════════╝\n\n` +
+    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `🎯 𝗤𝗫 𝗦𝗖𝗢𝗥𝗘 ➜ ${signal.scoreLabel} ${signal.aiScore}%\n` +
+    `📊 𝗧𝗥𝗘𝗡𝗗 ➜ ${signal.trend}\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n` +
+    `⏳ Waiting for Entry Signal...\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬`
+  );
+}
+
+// STEP 3: Trade Start Message (Entry Price + Time সহ)
+function buildTradeStartCaption(signal, flag, entryPrice, entryTimeStr) {
+  return (
+    `╔════════════════════╗\n` +
+    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬\n` +
     `╚════════════════════╝\n\n` +
     `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
@@ -881,12 +866,13 @@ function buildSignalCaption(signal, flag, entryPrice, entryTimeStr) {
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
     `⚠️ 𝗠𝗔𝗫 𝟭 𝗦𝗧𝗘𝗣 𝗠𝗧𝗚\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗣𝗿𝗲𝗱𝗶𝗰𝘁𝗼𝗿\n` +
+    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
+    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬\n` +
     `⚠️ Trade at your own risk.`
   );
 }
 
+// STEP 4: Result Message
 function buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) {
   return (
     `🏆 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
@@ -900,60 +886,79 @@ function buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 ONE SIGNAL ROUND — এখন মাত্র ৩টা ধাপ:
-// ১. Signal caption + chart (একসাথে, ছবির caption হিসেবে)
-// ২. Direction sticker (CALL/PUT)
-// ৩. Signal Result মেসেজ (chart ছাড়া, শুধু টেক্সট)
+// 🎯 MAIN SIGNAL ROUND (5-STEP WORKFLOW)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function runSignalRound(bot, signal, isMTG = false) {
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : (signal.flag || '');
 
-  // ━━━ ১. Direction reveal টাইমিং পর্যন্ত অপেক্ষা করে entry price + chart+caption একসাথে পাঠানো ━━━
-  console.log(`⏳ Waiting for signal timing (45s)...`);
-  await waitForExactSecond(45);
+  // ━━━ STEP 1: ANALYSIS MESSAGE (যেকোনো সময়) ━━━
+  console.log(`📊 Sending Analysis Message...`);
+  const analysisChart = await generateCandleChart(signal.symbol, signal.candles, null, null, null, `M1 • ${getBDTime().fullTime} (UTC+6) • Analysis Only`);
+  const analysisCaption = buildAnalysisCaption(signal, flag);
+  
+  if (analysisChart) {
+    await safeSendPhoto(bot, analysisChart, analysisCaption);
+  } else {
+    await safeSendMessage(bot, analysisCaption, { parse_mode: 'Markdown' });
+  }
 
+  // ━━━ STEP 2: WAIT & SEND DIRECTION (xx:xx:45-50) ━━━
+  console.log(`⏳ Waiting for direction time (45-50 sec)...`);
+  await waitForDirectionTime();
+  
   const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
-  const badgeType = signal.direction === 'UP' ? 'CALL' : 'PUT';
+  await safeSendSticker(bot, dirSticker);
+  console.log(`✅ Direction revealed: ${signal.direction}`);
 
-  await waitForExactSecond(59);
+  // ━━━ STEP 3: TRADE START (xx:xx:00-01) - পরের Candle Open ━━━
+  console.log(`⏳ Waiting for next candle open...`);
+  await waitForCandleOpen();
+  console.log(`🔔 TRADE START!`);
+  
   let entryPrice = signal.currentPrice;
   try {
     const p = await getCurrentPrice(signal.symbol);
     if (p) entryPrice = p;
-  } catch(e) {}
+  } catch(e) {
+    console.log(`⚠️ Price fetch failed: ${e.message}`);
+  }
+  
   const entryTimeStr = getBDTime().fullTime;
   console.log(`💰 Entry Price: ${entryPrice} @ ${entryTimeStr}`);
 
-  const subtitle = `M1  •  ${entryTimeStr} (UTC+6)  •  CONFIDENCE ${signal.aiScore}%  •  LIVE MARKET  •  AI Engine v5.0`;
-  const entryChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, subtitle);
-  const caption = buildSignalCaption(signal, flag, entryPrice, entryTimeStr);
-
-  if (entryChart) {
-    await safeSendPhoto(bot, entryChart, caption);
+  // Send Trade Start Chart
+  const badgeType = signal.direction === 'UP' ? 'CALL' : 'PUT';
+  const tradeChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, `M1 • ${entryTimeStr} (UTC+6) • CONFIDENCE ${signal.aiScore}% • LIVE MARKET`);
+  const tradeCaption = buildTradeStartCaption(signal, flag, entryPrice, entryTimeStr);
+  
+  if (tradeChart) {
+    await safeSendPhoto(bot, tradeChart, tradeCaption);
   } else {
-    await safeSendMessage(bot, caption, { parse_mode: 'Markdown' });
+    await safeSendMessage(bot, tradeCaption, { parse_mode: 'Markdown' });
   }
 
-  // ━━━ ২. Direction sticker ━━━
-  await safeSendSticker(bot, dirSticker);
-  console.log(`✅ ${signal.symbol} ${signal.direction} revealed`);
-
-  // ━━━ পরের candle এর close পর্যন্ত অপেক্ষা (fixed timing) ━━━
-  console.log(`⏳ Waiting for NEXT candle close (~60s)...`);
-  await sleep(55000);
+  // ━━━ STEP 4: WAIT FOR CLOSE & GET RESULT (xx:xx:58-59) ━━━
+  console.log(`⏳ Waiting for candle close...`);
   await waitForCandleClose();
   await sleep(1500);
+  console.log(`⏹️ Candle Closed!`);
 
   let exitPrice = entryPrice;
   try {
     const p = await getCurrentPrice(signal.symbol);
     if (p) exitPrice = p;
-  } catch(e) {}
+  } catch(e) {
+    console.log(`⚠️ Exit price fetch failed: ${e.message}`);
+  }
+
   console.log(`💰 Exit Price: ${exitPrice}`);
 
-  const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
+  // ✅ CORRECT LOGIC: Open vs Close comparison (same candle)
+  const isWin = (signal.direction === 'CALL' && exitPrice > entryPrice) || 
+                (signal.direction === 'PUT' && exitPrice < entryPrice);
+  
   console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
 
   if (!isMTG) {
@@ -962,7 +967,7 @@ async function runSignalRound(bot, signal, isMTG = false) {
   }
   tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
-  // ━━━ ৩. Result মেসেজ (টেক্সট, chart ছাড়া) ━━━
+  // ━━━ STEP 5: RESULT MESSAGE ━━━
   if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
   await safeSendMessage(bot, buildResultMessage(signal, flag, entryPrice, exitPrice, isWin), { parse_mode: 'Markdown' });
 
@@ -970,7 +975,7 @@ async function runSignalRound(bot, signal, isMTG = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 PRO SIGNAL SENDER — মূল রাউন্ড + (loss হলে) MTG রাউন্ড
+// 🎯 PRO SIGNAL SENDER (Main + MTG)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function sendProSignal(bot, signal) {
@@ -982,14 +987,14 @@ async function sendProSignal(bot, signal) {
   sentSignals.set(signalKey, Date.now());
 
   try {
-    // ━━━ মূল রাউন্ড ━━━
+    // ━━━ MAIN ROUND ━━━
     const main = await runSignalRound(bot, signal, false);
 
     if (main.isWin) {
       return true;
     }
 
-    // ━━━ লস → Recovery Signal নোটিশ ━━━
+    // ━━━ LOSS → MTG RECOVERY ━━━
     await safeSendMessage(bot,
       `🔄 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟\n\n` +
       `📊 𝗔𝗦𝗦𝗘𝗧 ➜ ${signal.symbol} ${main.flag}\n` +
@@ -998,24 +1003,22 @@ async function sendProSignal(bot, signal) {
       { parse_mode: 'Markdown' }
     );
 
-    const mtgWaitMs = (3 + Math.random() * 2) * 60 * 1000; // ৩–৫ মিনিট
+    const mtgWaitMs = (3 + Math.random() * 2) * 60 * 1000; // 3–5 minutes
     console.log(`⏳ MTG wait: ${Math.round(mtgWaitMs / 1000)}s`);
     await sleep(mtgWaitMs);
 
-    // ━━━ একই পেয়ারের জন্য রিফ্রেশড বিশ্লেষণ (MTG সিগন্যাল) ━━━
+    // Re-analyze same pair for MTG
     let mtgData = signal;
     try {
       const fresh = await analyzeSymbol(signal.symbol, false);
       fresh.flag = main.flag;
       mtgData = fresh;
     } catch (e) {
-      console.log(`⚠️ MTG re-analysis failed, using last known direction: ${e.message}`);
+      console.log(`⚠️ MTG re-analysis failed: ${e.message}`);
     }
 
-    // ━━━ MTG রাউন্ড (মূল রাউন্ডের মতোই, কিন্তু MTG sticker নেই — normal CALL/PUT) ━━━
+    // MTG Round
     const mtgResult = await runSignalRound(bot, mtgData, true);
-
-    // Max 1 Step MTG — এখানেও লস হলে এই সিগন্যাল স্কিপ, পরের নতুন সিগন্যাল খোঁজা হবে
     return mtgResult.isWin;
 
   } catch (error) {
@@ -1025,7 +1028,7 @@ async function sendProSignal(bot, signal) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🏁 MAIN SESSION RUNNER (dynamic close: ৩ win এ close, নাহলে max ৫)
+// 🏁 MAIN SESSION RUNNER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function runSession(bot, sessionName, isManual = false) {
@@ -1131,7 +1134,7 @@ async function runSession(bot, sessionName, isManual = false) {
         `🟢 **WIN:** ${winCount}\n` +
         `🔴 **LOSS:** ${lossCount}\n\n` +
         `💬 **Feedback:** @AkiL_xD\n` +
-        `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬**`,
         { parse_mode: 'Markdown' }
       );
     } else {
@@ -1142,7 +1145,7 @@ async function runSession(bot, sessionName, isManual = false) {
         `🔴 **LOSS:** ${lossCount}\n\n` +
         `🙏 **Thank You for Staying With Us.**\n` +
         `📅 **We'll Be Back With Better Setups.**\n\n` +
-        `🤖 **𝗤𝗫 𝗔𝗜 𝗣𝗥𝗘𝗗𝗜𝗖𝗧𝗢𝗥 𝗩𝟱.𝟬**`,
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬**`,
         { parse_mode: 'Markdown' }
       );
     }
@@ -1160,13 +1163,13 @@ async function runSession(bot, sessionName, isManual = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ AUTO SCHEDULER — দিনে ২ বার: দুপুর ২টা ও রাত ৯টা (BD Time)
+// ⏰ AUTO SCHEDULER
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 module.exports = function (bot) {
   if (schedulerInitialized) { console.log('⚠️ Scheduler already initialized'); return; }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v8.0 — TradingView-style chart + streamlined messages)');
+  console.log('✅ Scheduler started (v9.0 — Real Candle Workflow: Analysis → Direction → Trade Start → Result)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
@@ -1179,7 +1182,7 @@ module.exports = function (bot) {
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `⏰ **Afternoon Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕑 ২:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `⏰ **Afternoon Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕑 ২:०० টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
@@ -1196,7 +1199,7 @@ module.exports = function (bot) {
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `🌙 **Night Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕘 রাত ৯:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `🌙 **Night Session শুরু হবে ३० মিনিট পরে!**\n\n🕘 রাত ९:०० টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
