@@ -1,9 +1,11 @@
-// session.js - v9.0 - FIXED REAL CANDLE WORKFLOW
-// Step 1: Analysis Only
-// Step 2: Direction Sticker (xx:xx:45-50)
-// Step 3: Trade Start (xx:xx:00 - Next Candle Open)
-// Step 4: Result (xx:xx:59 - Next Candle Close)
-// Step 5: MTG or WIN
+// session.js - v10.0 - SINGLE-MESSAGE + LAST-MOMENT VERIFICATION WORKFLOW
+// Step 1: Silent AI Analysis (no message sent to channel)
+// Step 2: Wait until 45s before next candle open
+// Step 3: Last-Moment Re-Verification (last closed candle recheck)
+//         -> if direction changed / confidence dropped => CANCEL, restart analysis
+// Step 4: Candle Open (Entry) -> Send ONE Final Signal Message (chart + entry + direction)
+// Step 5: Candle Close -> Result Message
+// Step 6: MTG or WIN
 
 const twelveData = require('./twelvedata');
 const fs = require('fs');
@@ -45,11 +47,11 @@ const MARKET_SESSIONS = {
 };
 
 const SESSION_INTRO_MESSAGE =
-  `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬**\n\n` +
+  `🏁 **𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟭𝟬.𝟬**\n\n` +
   `🚀 **𝗟𝗶𝘃𝗲 𝗧𝗿𝗮𝗱𝗶𝗻𝗴 𝗦𝗲𝘀𝘀𝗶𝗼𝗻**\n\n` +
-  `🎯 **উচ্চ-মানের (𝗛𝗶𝗴𝗵-𝗤𝘂𝗮𝗹𝗶𝘁𝘆) সেটআপ নিশ্চিত হলেই 𝗦𝗶𝗴𝗻𝗮𝗹 𝗗𝗶𝗿𝗲𝗰𝘁𝗶𝗼𝗻 প্রদান করা হবে।**\n\n` +
-  `📊 **তাড়াহুড়ো নয়—শুধু সেরা সুযোগের জন্য অপেক্ষা করুন।**\n\n` +
-  `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই অনুসরণ করুন।**`;
+  `🎯 **শুধুমাত্র high - accuracy Conform Setup- পেলে Signal প্রদান করা হবে।**\n\n` +
+  `📌 **Signal নেওয়ার আগে অবশ্যই Channel-এর Pin Message (𝗦𝗜𝗚𝗡𝗔𝗟 𝗚𝗨𝗜𝗗𝗘𝗟𝗜𝗡𝗘) পড়ে নিবেন। সেখানে Entry Time, Signal Update, Risk Management এবং Trading Rules বিস্তারিত দেওয়া আছে।**\n\n` +
+  `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই ফলো করবেন।**`;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 📊 PERFORMANCE TRACKER
@@ -58,11 +60,11 @@ const SESSION_INTRO_MESSAGE =
 class PerformanceTracker {
   constructor() {
     this.statsFile = path.join(__dirname, 'stats.json');
-    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {}, mtg: { total: 0, wins: 0, losses: 0 } };
+    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {}, mtg: { total: 0, wins: 0, losses: 0 }, cancelled: 0 };
     this.loadStats();
   }
   loadStats() {
-    try { if (fs.existsSync(this.statsFile)) this.stats = JSON.parse(fs.readFileSync(this.statsFile)); } catch(e) {}
+    try { if (fs.existsSync(this.statsFile)) this.stats = { ...this.stats, ...JSON.parse(fs.readFileSync(this.statsFile)) }; } catch(e) {}
   }
   saveStats() {
     try { fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2)); } catch(e) {}
@@ -83,8 +85,12 @@ class PerformanceTracker {
     else { if (isMTG) this.stats.daily[today].mtgLosses++; else this.stats.daily[today].losses++; }
     this.saveStats();
   }
+  addCancelled() {
+    this.stats.cancelled = (this.stats.cancelled || 0) + 1;
+    this.saveStats();
+  }
   getStatsMessage() {
-    const { total, wins, losses, winRate, pairs, mtg } = this.stats;
+    const { total, wins, losses, winRate, pairs, mtg, cancelled } = this.stats;
     const today = getBDTime().dateKey;
     const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
     const mtgRate = mtg.total > 0 ? (mtg.wins / mtg.total * 100) : 0;
@@ -94,7 +100,7 @@ class PerformanceTracker {
       const rate = data.wins+data.losses > 0 ? (data.wins/(data.wins+data.losses)*100) : 0;
       pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
     }
-    return `📊 **QX AI PERFORMANCE v9.0**\n\n━━━━━━━━━━━━━━━━━━━\n📈 **TOTAL**: ${total}\n✅ **WINS**: ${wins}\n❌ **LOSSES**: ${losses}\n🎯 **WIN RATE**: ${winRate.toFixed(1)}%\n🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})\n━━━━━━━━━━━━━━━━━━━\n\n📅 **TODAY**: ${daily.wins}W / ${daily.losses}L\n🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L\n\n📊 **TOP PAIRS**\n${pairStats || '  No data yet'}\n\n💎 **OWNER**: @AkiL_xD 👾`;
+    return `📊 **QX AI PERFORMANCE v10.0**\n\n━━━━━━━━━━━━━━━━━━━\n📈 **TOTAL**: ${total}\n✅ **WINS**: ${wins}\n❌ **LOSSES**: ${losses}\n🎯 **WIN RATE**: ${winRate.toFixed(1)}%\n🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})\n🚫 **CANCELLED (Re-verify Failed)**: ${cancelled || 0}\n━━━━━━━━━━━━━━━━━━━\n\n📅 **TODAY**: ${daily.wins}W / ${daily.losses}L\n🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L\n\n📊 **TOP PAIRS**\n${pairStats || '  No data yet'}\n\n💎 **OWNER**: @AkiL_xD 👾`;
   }
   getTodayStats() {
     const today = getBDTime().dateKey;
@@ -282,7 +288,7 @@ async function getCandles(symbol, count = 50, interval = '1min') {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 INDICATORS (সব পুরনো indicators থাকছে)
+// 📈 CORE INDICATORS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
@@ -467,7 +473,8 @@ function calcChaikinMF(candles, period = 21) {
   let sumMF = 0;
   for (let i = candles.length - period; i < candles.length; i++) {
     const c = candles[i];
-    const mf = ((c.close - c.low) - (c.high - c.close)) / (c.high - c.low) * (c.volume || 1);
+    const range = (c.high - c.low) || 0.0001;
+    const mf = ((c.close - c.low) - (c.high - c.close)) / range * (c.volume || 1);
     sumMF += mf;
   }
   const totalVol = candles.slice(-period).reduce((s, c) => s + (c.volume || 1), 0);
@@ -475,7 +482,110 @@ function calcChaikinMF(candles, period = 21) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 FULL ANALYSIS
+// 🧠 EXTENDED SMART-MONEY / STRUCTURE FILTERS (Problem 4)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+// Find swing highs/lows via simple pivot detection
+function findSwingPoints(candles, lookback = 2) {
+  const highs = [], lows = [];
+  for (let i = lookback; i < candles.length - lookback; i++) {
+    const c = candles[i];
+    let isHigh = true, isLow = true;
+    for (let j = i - lookback; j <= i + lookback; j++) {
+      if (j === i) continue;
+      if (candles[j].high >= c.high) isHigh = false;
+      if (candles[j].low <= c.low) isLow = false;
+    }
+    if (isHigh) highs.push({ idx: i, price: c.high });
+    if (isLow) lows.push({ idx: i, price: c.low });
+  }
+  return { highs, lows };
+}
+
+// Market Structure: BOS (Break of Structure) & CHOCH (Change of Character)
+function calcMarketStructure(candles) {
+  const { highs, lows } = findSwingPoints(candles);
+  if (highs.length < 2 || lows.length < 2) return { structure: 'NEUTRAL', bos: false, choch: false, dir: 'NEUTRAL' };
+
+  const lastHigh = highs[highs.length - 1], prevHigh = highs[highs.length - 2];
+  const lastLow = lows[lows.length - 1], prevLow = lows[lows.length - 2];
+
+  const higherHighs = lastHigh.price > prevHigh.price;
+  const higherLows = lastLow.price > prevLow.price;
+  const lowerHighs = lastHigh.price < prevHigh.price;
+  const lowerLows = lastLow.price < prevLow.price;
+
+  let structure = 'NEUTRAL';
+  if (higherHighs && higherLows) structure = 'BULLISH';
+  else if (lowerHighs && lowerLows) structure = 'BEARISH';
+
+  const last = candles[candles.length - 1].close;
+  const bosUp = last > lastHigh.price;
+  const bosDown = last < lastLow.price;
+  const choch = (structure === 'BEARISH' && bosUp) || (structure === 'BULLISH' && bosDown);
+  const dir = bosUp ? 'UP' : bosDown ? 'DOWN' : (structure === 'BULLISH' ? 'UP' : structure === 'BEARISH' ? 'DOWN' : 'NEUTRAL');
+
+  return { structure, bos: bosUp || bosDown, choch, dir };
+}
+
+// Liquidity Sweep: wick beyond recent high/low, close back inside (stop-hunt)
+function detectLiquiditySweep(candles, lookback = 15) {
+  if (candles.length < lookback + 1) return { swept: false, dir: 'NEUTRAL' };
+  const recent = candles.slice(-lookback - 1, -1);
+  const last = candles[candles.length - 1];
+  const recentHigh = Math.max(...recent.map(c => c.high));
+  const recentLow = Math.min(...recent.map(c => c.low));
+  const sweptHigh = last.high > recentHigh && last.close < recentHigh;
+  const sweptLow = last.low < recentLow && last.close > recentLow;
+  if (sweptHigh) return { swept: true, dir: 'DOWN' }; // buy-side liquidity swept -> bearish reversal bias
+  if (sweptLow) return { swept: true, dir: 'UP' };     // sell-side liquidity swept -> bullish reversal bias
+  return { swept: false, dir: 'NEUTRAL' };
+}
+
+// Fake Breakout: closed beyond S/R then closed back inside next candle
+function detectFakeBreakout(candles, sr) {
+  if (candles.length < 3) return { fake: false, dir: 'NEUTRAL' };
+  const prev = candles[candles.length - 2], last = candles[candles.length - 1];
+  const brokeResistance = prev.close > sr.resistance;
+  const brokeSupport = prev.close < sr.support;
+  const backInsideAfterRes = brokeResistance && last.close < sr.resistance;
+  const backInsideAfterSup = brokeSupport && last.close > sr.support;
+  if (backInsideAfterRes) return { fake: true, dir: 'DOWN' };
+  if (backInsideAfterSup) return { fake: true, dir: 'UP' };
+  return { fake: false, dir: 'NEUTRAL' };
+}
+
+// Volume Strength: recent volume vs longer average
+function calcVolumeStrength(candles) {
+  const recent = candles.slice(-5), longer = candles.slice(-20);
+  const avgRecent = recent.reduce((s, c) => s + (c.volume || 0), 0) / recent.length;
+  const avgLonger = (longer.reduce((s, c) => s + (c.volume || 0), 0) / longer.length) || 1;
+  const ratio = avgRecent / avgLonger;
+  return { ratio, weak: ratio < 0.7 };
+}
+
+// Sideways / Choppy Market Detection
+function isSidewaysMarket(adxVal, bb, currentPrice) {
+  const bbWidthPct = ((bb.upper - bb.lower) / currentPrice) * 100;
+  return adxVal < 18 && bbWidthPct < 0.08;
+}
+
+// Higher Timeframe (5min) Trend Confirmation
+async function getHigherTimeframeTrend(symbol) {
+  try {
+    const data = await twelveData.getTimeSeries(symbol, '5min', 30);
+    if (!data.values || data.values.length < 20) return 'NEUTRAL';
+    const candles = data.values.map(v => ({
+      open: +v.open, high: +v.high, low: +v.low, close: +v.close, volume: +v.volume || 0
+    })).reverse();
+    return calcTrend(candles).dir;
+  } catch (e) {
+    return 'NEUTRAL';
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔍 FULL ANALYSIS (Confidence >= 90% required in strict mode)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function analyzeSymbol(symbol, relaxed = false) {
@@ -495,6 +605,10 @@ async function analyzeSymbol(symbol, relaxed = false) {
   const mfi = calcMFI(candles);
   const fib = calcFibonacci(candles);
   const cmf = calcChaikinMF(candles);
+  const structure = calcMarketStructure(candles);
+  const sweep = detectLiquiditySweep(candles);
+  const fakeBO = detectFakeBreakout(candles, sr);
+  const volStrength = calcVolumeStrength(candles);
 
   const last = candles[candles.length - 1].close;
   let up = 0, dn = 0;
@@ -542,11 +656,37 @@ async function analyzeSymbol(symbol, relaxed = false) {
   if (cmf > 0.1) { up += 2; signals.push('CMF Bullish 🟢'); }
   else if (cmf < -0.1) { dn += 2; signals.push('CMF Bearish 🔴'); }
 
+  // --- Smart-money structure signals ---
+  if (structure.dir === 'UP') { up += 3; signals.push('Bullish Market Structure (BOS) 🧱'); }
+  else if (structure.dir === 'DOWN') { dn += 3; signals.push('Bearish Market Structure (BOS) 🧱'); }
+  if (structure.choch) signals.push('⚠️ CHOCH Detected');
+
+  if (sweep.swept) {
+    if (sweep.dir === 'UP') { up += 2; signals.push('Liquidity Sweep (Sell-side) 🎯'); }
+    else { dn += 2; signals.push('Liquidity Sweep (Buy-side) 🎯'); }
+  }
+
+  if (fakeBO.fake) {
+    signals.push('⚠️ Fake Breakout Detected');
+    if (fakeBO.dir === 'UP') up += 2; else dn += 2;
+  }
+
   const total = up + dn;
   const dominant = Math.max(up, dn);
   const ratio = total > 0 ? dominant / total : 0;
   const direction = up >= dn ? 'UP' : 'DOWN';
-  const aiScore = Math.round(ratio * 100);
+  let aiScore = Math.round(ratio * 100);
+
+  const sideways = isSidewaysMarket(adx.adx, bb, last);
+
+  // Only spend an extra API call on Higher-Timeframe trend for candidates that already look decent,
+  // to avoid burning through TwelveData rate limits on weak/junk pairs.
+  let htfTrend = 'NEUTRAL';
+  if (aiScore >= 65 && !sideways) {
+    htfTrend = await getHigherTimeframeTrend(symbol);
+    if (htfTrend === direction) { aiScore = Math.min(100, aiScore + 3); signals.push(`HTF (5m) Aligned: ${htfTrend} ✅`); }
+    else if (htfTrend !== 'NEUTRAL') { signals.push(`⚠️ HTF (5m) Conflict: ${htfTrend}`); }
+  }
 
   let scoreLabel = '';
   if (aiScore >= 90) scoreLabel = 'VERY HIGH 🔥';
@@ -560,22 +700,59 @@ async function analyzeSymbol(symbol, relaxed = false) {
     vwap.dir,
     adx.adx >= 25 ? (adx.plusDI > adx.minusDI ? 'UP' : 'DOWN') : direction,
     cmf > 0 ? 'UP' : 'DOWN',
-    fib.above618 ? 'UP' : 'DOWN'
+    fib.above618 ? 'UP' : 'DOWN',
+    structure.dir === 'NEUTRAL' ? direction : structure.dir
   ].filter(d => d === direction).length;
 
+  const htfAligned = htfTrend === direction || htfTrend === 'NEUTRAL';
+  const volumeOk = !volStrength.weak;
+  const noFakeAgainst = !(fakeBO.fake && fakeBO.dir !== direction);
+  const noChochAgainst = !(structure.choch && structure.dir !== direction);
+  const notSideways = !sideways;
+
   const isValid = relaxed
-    ? (ratio >= 0.65 && aiScore >= 65 && volatility >= 0.002)
-    : (ratio >= 0.85 && trend.isStrong && volatility >= 0.004 && aiScore >= 80 && adx.adx >= 22 && directionsAgree >= 4);
+    ? (ratio >= 0.70 && aiScore >= 70 && volatility >= 0.002 && notSideways && volumeOk)
+    : (ratio >= 0.90 && aiScore >= 90 && trend.isStrong && volatility >= 0.004 && adx.adx >= 20 &&
+       directionsAgree >= 5 && htfAligned && notSideways && volumeOk && noFakeAgainst && noChochAgainst);
 
   return {
     symbol, direction, ratio, aiScore, scoreLabel, trend: trend.dir,
-    signals: signals.slice(0, 8), currentPrice: last, volatility,
-    isValid, sr, candles, adx: adx.adx, directionsAgree
+    signals: signals.slice(0, 10), currentPrice: last, volatility,
+    isValid, sr, candles, adx: adx.adx, directionsAgree,
+    structure, sweep, fakeBO, volStrength, sideways, htfTrend
   };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 CHART GENERATION (QuickChart)
+// ✅ LAST-MOMENT RE-VERIFICATION (45s before entry)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function reverifySignal(signal) {
+  try {
+    const fresh = await analyzeSymbol(signal.symbol, false);
+    const sameDirection = fresh.direction === signal.direction;
+    const stillStrong = fresh.aiScore >= 75 && fresh.ratio >= 0.75;
+    const notSidewaysNow = !fresh.sideways;
+    const noFakeAgainstNow = !(fresh.fakeBO.fake && fresh.fakeBO.dir !== signal.direction);
+    const noChochAgainstNow = !(fresh.structure.choch && fresh.structure.dir !== signal.direction);
+
+    const confirmed = sameDirection && stillStrong && notSidewaysNow && noFakeAgainstNow && noChochAgainstNow;
+
+    return {
+      confirmed,
+      updatedData: confirmed ? {
+        aiScore: fresh.aiScore, scoreLabel: fresh.scoreLabel, trend: fresh.direction,
+        signals: fresh.signals, candles: fresh.candles, currentPrice: fresh.currentPrice, ratio: fresh.ratio
+      } : {}
+    };
+  } catch (e) {
+    console.log(`⚠️ Re-verification failed for ${signal.symbol}: ${e.message}`);
+    return { confirmed: false, updatedData: {} };
+  }
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 📊 CHART GENERATION (QuickChart — TradingView-style colors)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function formatChartTime(offsetMinutesFromNow) {
@@ -601,23 +778,27 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
       rsiPoints.push(slice.length >= 15 ? calcRSI(slice) : 50);
     }
 
+    // TradingView-style palette
+    const COLOR_UP = '#26a969';
+    const COLOR_DOWN = '#ef5350';
+
     const annotations = {
       supportLine: {
         type: 'line', yMin: sr.support, yMax: sr.support, yScaleID: 'yPrice',
-        borderColor: 'rgba(150,150,150,0.5)', borderWidth: 1, borderDash: [4,4],
-        label: { content: `S ${sr.support.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(150,150,150,0.9)', font: { size: 9 } }
+        borderColor: 'rgba(160,160,170,0.45)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `S ${sr.support.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(170,170,180,0.9)', font: { size: 9 } }
       },
       resistanceLine: {
         type: 'line', yMin: sr.resistance, yMax: sr.resistance, yScaleID: 'yPrice',
-        borderColor: 'rgba(255,68,68,0.5)', borderWidth: 1, borderDash: [4,4],
-        label: { content: `R ${sr.resistance.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(255,68,68,0.9)', font: { size: 9 } }
+        borderColor: 'rgba(239,83,80,0.45)', borderWidth: 1, borderDash: [4,4],
+        label: { content: `R ${sr.resistance.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: 'transparent', color: 'rgba(239,83,80,0.9)', font: { size: 9 } }
       }
     };
 
     if (entryPrice) {
       annotations.entryLine = {
         type: 'line', yMin: entryPrice, yMax: entryPrice, yScaleID: 'yPrice',
-        borderColor: 'rgba(255,255,255,0.8)', borderWidth: 1.5, borderDash: [6, 3],
+        borderColor: 'rgba(255,255,255,0.85)', borderWidth: 1.3, borderDash: [6, 3],
         label: { content: `ENTRY ${entryPrice.toFixed(5)}`, enabled: true, position: 'start', backgroundColor: 'transparent', color: '#fff', font: { size: 10 } }
       };
     }
@@ -626,19 +807,18 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
       const isWin = exitPrice > entryPrice;
       annotations.exitLine = {
         type: 'line', yMin: exitPrice, yMax: exitPrice, yScaleID: 'yPrice',
-        borderColor: isWin ? '#00c896' : '#ff5252', borderWidth: 1.5, borderDash: [2, 2],
-        label: { content: `CLOSE ${exitPrice.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: isWin ? 'rgba(0,200,150,0.85)' : 'rgba(255,82,82,0.85)', color: '#fff', font: { size: 10, weight: 'bold' } }
+        borderColor: isWin ? COLOR_UP : COLOR_DOWN, borderWidth: 1.3, borderDash: [2, 2],
+        label: { content: `CLOSE ${exitPrice.toFixed(5)}`, enabled: true, position: 'end', backgroundColor: isWin ? 'rgba(38,169,105,0.85)' : 'rgba(239,83,80,0.85)', color: '#fff', font: { size: 10, weight: 'bold' } }
       };
     }
 
     if (badgeType) {
       const badgeColors = {
-        CALL: { border: '#00c896', bg: 'rgba(0,200,150,0.15)' },
-        PUT: { border: '#ff5252', bg: 'rgba(255,82,82,0.15)' },
-        SURESHOT: { border: '#00c896', bg: 'rgba(0,200,150,0.15)' }
+        CALL: { border: COLOR_UP, bg: 'rgba(38,169,105,0.15)' },
+        PUT: { border: COLOR_DOWN, bg: 'rgba(239,83,80,0.15)' }
       };
       const bc = badgeColors[badgeType] || badgeColors.CALL;
-      const badgeLabel = badgeType === 'CALL' ? '▲ CALL' : badgeType === 'PUT' ? '▼ PUT' : 'SURESHOT ✓';
+      const badgeLabel = badgeType === 'CALL' ? '▲ CALL' : '▼ PUT';
       annotations.badge = {
         type: 'label',
         xValue: n - 2,
@@ -648,7 +828,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
         color: bc.border,
         backgroundColor: bc.bg,
         borderColor: bc.border,
-        borderWidth: 1.5,
+        borderWidth: 1.3,
         borderRadius: 4,
         font: { size: 12, weight: 'bold' },
         padding: 6
@@ -656,7 +836,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
     }
 
     const titleText = symbol;
-    const subtitleText = subtitle || `M1 • ${getBDTime().fullTime} (UTC+6) • AI Engine v9.0`;
+    const subtitleText = subtitle || `M1 • ${getBDTime().fullTime} (UTC+6) • AI Engine v10.0`;
 
     const chartConfig = {
       type: 'candlestick',
@@ -666,24 +846,25 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
           {
             label: symbol,
             data: ohlcData,
-            color: { up: '#00c896', down: '#ff5252', unchanged: '#999999' },
+            color: { up: COLOR_UP, down: COLOR_DOWN, unchanged: '#888888' },
+            borderColor: { up: COLOR_UP, down: COLOR_DOWN, unchanged: '#888888' },
             yAxisID: 'yPrice'
           },
           {
             type: 'line', label: 'EMA 7',
             data: ema7Series.map((v, i) => ({ x: i, y: v })),
-            borderColor: '#ffaa00', borderWidth: 1.3, pointRadius: 0, fill: false, yAxisID: 'yPrice'
+            borderColor: '#ffaa00', borderWidth: 1.2, pointRadius: 0, fill: false, yAxisID: 'yPrice'
           },
           {
             type: 'line', label: 'EMA 21',
             data: ema21Series.map((v, i) => ({ x: i, y: v })),
-            borderColor: '#00d4ff', borderWidth: 1.3, pointRadius: 0, fill: false, yAxisID: 'yPrice'
+            borderColor: '#2196f3', borderWidth: 1.2, pointRadius: 0, fill: false, yAxisID: 'yPrice'
           },
           {
             type: 'line', label: 'RSI (14)',
             data: rsiPoints.map((v, i) => ({ x: i, y: v })),
-            borderColor: '#b568f2', backgroundColor: 'rgba(181,104,242,0.08)',
-            borderWidth: 1.3, pointRadius: 0, fill: true, tension: 0.15,
+            borderColor: '#b568f2', backgroundColor: 'rgba(181,104,242,0.06)',
+            borderWidth: 1.2, pointRadius: 0, fill: true, tension: 0.15,
             yAxisID: 'yRsi'
           }
         ]
@@ -692,37 +873,37 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
         layout: { padding: { top: 55, right: 10, left: 5, bottom: 5 } },
         plugins: {
           title: {
-            display: true, text: titleText, color: '#f0f0f0',
-            font: { size: 20, weight: 'bold' }, align: 'start', padding: { bottom: 2 }
+            display: true, text: titleText, color: '#d1d4dc',
+            font: { size: 19, weight: 'bold' }, align: 'start', padding: { bottom: 2 }
           },
           subtitle: {
-            display: true, text: subtitleText, color: '#8a8a8a',
+            display: true, text: subtitleText, color: '#787b86',
             font: { size: 11 }, align: 'start', padding: { bottom: 10 }
           },
           legend: {
             display: true, position: 'top', align: 'start',
-            labels: { color: '#cccccc', font: { size: 10 }, boxWidth: 14, filter: (item) => item.text !== symbol }
+            labels: { color: '#d1d4dc', font: { size: 10 }, boxWidth: 14, filter: (item) => item.text !== symbol }
           },
           annotation: { annotations }
         },
         scales: {
           x: {
             type: 'category',
-            ticks: { color: '#777', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } },
-            grid: { color: 'rgba(255,255,255,0.04)' }
+            ticks: { color: '#787b86', maxRotation: 0, autoSkip: true, maxTicksLimit: 8, font: { size: 9 } },
+            grid: { color: 'rgba(255,255,255,0.05)' }
           },
           yPrice: {
             position: 'right',
             stack: 'panels', stackWeight: 3,
-            ticks: { color: '#999', font: { size: 10 } },
-            grid: { color: 'rgba(255,255,255,0.05)' }
+            ticks: { color: '#d1d4dc', font: { size: 10 } },
+            grid: { color: 'rgba(255,255,255,0.06)' }
           },
           yRsi: {
             position: 'right',
             stack: 'panels', stackWeight: 1,
             min: 0, max: 100,
-            ticks: { color: '#999', font: { size: 9 }, stepSize: 30 },
-            grid: { color: 'rgba(255,255,255,0.04)' }
+            ticks: { color: '#787b86', font: { size: 9 }, stepSize: 30 },
+            grid: { color: 'rgba(255,255,255,0.05)' }
           }
         }
       }
@@ -735,7 +916,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
         chart: chartConfig,
         width: 900,
         height: 560,
-        backgroundColor: '#0d0e17',
+        backgroundColor: '#131722', // TradingView dark background
         version: '3'
       })
     });
@@ -749,7 +930,7 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 BEST PAIR FINDER
+// 🔍 BEST PAIR FINDER (fully silent — no messages sent)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function findBestPair(ignoreTime = false, relaxed = false) {
@@ -771,7 +952,7 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
       const result = await analyzeSymbol(pair.symbol, relaxed);
       result.flag = pair.flag;
       result.priority = pair.priority;
-      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/7`);
+      console.log(`📊 ${pair.symbol}: Score=${result.aiScore}% | Valid=${result.isValid} | ADX=${result.adx.toFixed(0)} | Agree=${result.directionsAgree}/8 | Sideways=${result.sideways} | HTF=${result.htfTrend}`);
 
       if (!result.isValid) { await sleep(800); continue; }
 
@@ -792,22 +973,23 @@ async function findBestPair(ignoreTime = false, relaxed = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ⏰ TIMING FUNCTIONS (CRITICAL)
+// ⏰ TIMING FUNCTIONS
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Step 2: Direction এর আগে (xx:xx:45-50)
-function waitForDirectionTime() {
+// Wait until 45 seconds before next candle open (i.e. second 15-20 of current minute).
+// This is the last-moment re-verification window (Problem 2).
+function waitForVerificationTime() {
   return new Promise(resolve => {
     const check = setInterval(() => {
       const now = new Date(Date.now() + 6 * 60 * 60 * 1000);
       const s = now.getUTCSeconds();
-      if (s >= 45 && s <= 50) { clearInterval(check); resolve(); }
+      if (s >= 15 && s <= 20) { clearInterval(check); resolve(); }
     }, 200);
     setTimeout(() => { clearInterval(check); resolve(); }, 65000);
   });
 }
 
-// Step 3: পরের Candle open (xx:xx:00-01)
+// Next candle open (xx:xx:00-01) — actual ENTRY moment
 function waitForCandleOpen() {
   return new Promise(resolve => {
     const check = setInterval(() => {
@@ -819,7 +1001,7 @@ function waitForCandleOpen() {
   });
 }
 
-// Step 4: Candle close (xx:xx:58-59)
+// Candle close (xx:xx:58-59)
 function waitForCandleClose() {
   return new Promise(resolve => {
     const check = setInterval(() => {
@@ -832,47 +1014,30 @@ function waitForCandleClose() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 MESSAGE BUILDERS
+// 🎯 MESSAGE BUILDERS (Problem 1 — ONE final message only)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// STEP 1: Analysis Message (Direction ছাড়া, Entry Price ছাড়া)
-function buildAnalysisCaption(signal, flag) {
+function buildFinalSignalCaption(signal, flag, entryPrice, entryTimeStr, badgeType) {
+  const dirLabel = badgeType === 'CALL' ? '📈 𝗖𝗔𝗟𝗟 (𝗨𝗣)' : '📉 𝗣𝗨𝗧 (𝗗𝗢𝗪𝗡)';
   return (
     `╔════════════════════╗\n` +
-    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬\n` +
+    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟭𝟬.𝟬\n` +
     `╚════════════════════╝\n\n` +
-    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
+    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n` +
+    `🎯 𝗗𝗜𝗥𝗘𝗖𝗧𝗜𝗢𝗡 ➜ ${dirLabel}\n\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🎯 𝗤𝗫 𝗦𝗖𝗢𝗥𝗘 ➜ ${signal.scoreLabel} ${signal.aiScore}%\n` +
-    `📊 𝗧𝗥𝗘𝗡𝗗 ➜ ${signal.trend}\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `⏳ Waiting for Entry Signal...\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬`
-  );
-}
-
-// STEP 3: Trade Start Message (Entry Price + Time সহ)
-function buildTradeStartCaption(signal, flag, entryPrice, entryTimeStr) {
-  return (
-    `╔════════════════════╗\n` +
-    `          🚀 𝗤𝗫 𝗔𝗜 𝗟𝗜𝗩𝗘 𝗩𝟵.𝟬\n` +
-    `╚════════════════════╝\n\n` +
-    `💹 𝗔𝗦𝗦𝗘𝗧      ➜ ${signal.symbol} ${flag}\n\n` +
-    `━━━━━━━━━━━━━━━━━━━━━━\n` +
-    `🎯 𝗤𝗫 𝗦𝗖𝗢𝗥𝗘 ➜ ${signal.scoreLabel} ${signal.aiScore}%\n` +
-    `💰 𝗘𝗡𝗧𝗥𝗬 𝗣𝗥𝗜𝗖𝗘: ${entryPrice.toFixed(5)}\n` +
-    `⏰ 𝗘𝗡𝗧𝗥𝗬 𝗧𝗜𝗠𝗘: ${entryTimeStr} (𝗕𝗗)\n` +
+    `💰 𝗘𝗡𝗧𝗥𝗬 𝗣𝗥𝗜𝗖𝗘 ➜ ${entryPrice.toFixed(5)}\n` +
+    `⏰ 𝗘𝗡𝗧𝗥𝗬 𝗧𝗜𝗠𝗘 ➜ ${entryTimeStr} (𝗕𝗗)\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n` +
     `🛡️ 𝗥𝗜𝗦𝗞 𝗠𝗔𝗡𝗔𝗚𝗘𝗠𝗘𝗡𝗧\n` +
     `⚠️ 𝗠𝗔𝗫 𝟭 𝗦𝗧𝗘𝗣 𝗠𝗧𝗚\n` +
     `━━━━━━━━━━━━━━━━━━━━━━\n\n` +
-    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬\n` +
+    `🤖 𝗣𝗢𝗪𝗘𝗥𝗘𝗗 𝗕𝗬 𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟭𝟬.𝟬\n` +
     `⚠️ Trade at your own risk.`
   );
 }
 
-// STEP 4: Result Message
 function buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) {
   return (
     `🏆 𝗦𝗜𝗚𝗡𝗔𝗟 𝗥𝗘𝗦𝗨𝗟𝗧\n\n` +
@@ -886,60 +1051,58 @@ function buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🎯 MAIN SIGNAL ROUND (5-STEP WORKFLOW)
+// 🎯 MAIN SIGNAL ROUND (Silent Analysis → Verify → ONE Message → Result)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 async function runSignalRound(bot, signal, isMTG = false) {
   const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
   const flag = pairInfo ? pairInfo.flag : (signal.flag || '');
 
-  // ━━━ STEP 1: ANALYSIS MESSAGE (যেকোনো সময়) ━━━
-  console.log(`📊 Sending Analysis Message...`);
-  const analysisChart = await generateCandleChart(signal.symbol, signal.candles, null, null, null, `M1 • ${getBDTime().fullTime} (UTC+6) • Analysis Only`);
-  const analysisCaption = buildAnalysisCaption(signal, flag);
-  
-  if (analysisChart) {
-    await safeSendPhoto(bot, analysisChart, analysisCaption);
-  } else {
-    await safeSendMessage(bot, analysisCaption, { parse_mode: 'Markdown' });
+  // ━━━ STEP 1: Wait until 45s before entry (silent) ━━━
+  console.log(`⏳ [${signal.symbol}] Waiting for verification window (45s before entry)...`);
+  await waitForVerificationTime();
+
+  // ━━━ STEP 2: Last-Moment Re-Verification ━━━
+  console.log(`🔎 [${signal.symbol}] Re-verifying last closed candle...`);
+  const verification = await reverifySignal(signal);
+  if (!verification.confirmed) {
+    console.log(`🚫 [${signal.symbol}] Signal CANCELLED — direction/confidence changed. No message sent.`);
+    tracker.addCancelled();
+    return { cancelled: true };
   }
+  signal = { ...signal, ...verification.updatedData };
+  console.log(`✅ [${signal.symbol}] Re-verified — direction unchanged (${signal.direction}, ${signal.aiScore}%)`);
 
-  // ━━━ STEP 2: WAIT & SEND DIRECTION (xx:xx:45-50) ━━━
-  console.log(`⏳ Waiting for direction time (45-50 sec)...`);
-  await waitForDirectionTime();
-  
-  const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
-  await safeSendSticker(bot, dirSticker);
-  console.log(`✅ Direction revealed: ${signal.direction}`);
-
-  // ━━━ STEP 3: TRADE START (xx:xx:00-01) - পরের Candle Open ━━━
-  console.log(`⏳ Waiting for next candle open...`);
+  // ━━━ STEP 3: Wait for actual candle open = ENTRY ━━━
   await waitForCandleOpen();
   console.log(`🔔 TRADE START!`);
-  
+
   let entryPrice = signal.currentPrice;
   try {
     const p = await getCurrentPrice(signal.symbol);
     if (p) entryPrice = p;
-  } catch(e) {
+  } catch (e) {
     console.log(`⚠️ Price fetch failed: ${e.message}`);
   }
-  
+
   const entryTimeStr = getBDTime().fullTime;
   console.log(`💰 Entry Price: ${entryPrice} @ ${entryTimeStr}`);
 
-  // Send Trade Start Chart
+  // ━━━ STEP 4: Send ONE Final Signal Message (Problem 1) ━━━
   const badgeType = signal.direction === 'UP' ? 'CALL' : 'PUT';
-  const tradeChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, `M1 • ${entryTimeStr} (UTC+6) • CONFIDENCE ${signal.aiScore}% • LIVE MARKET`);
-  const tradeCaption = buildTradeStartCaption(signal, flag, entryPrice, entryTimeStr);
-  
-  if (tradeChart) {
-    await safeSendPhoto(bot, tradeChart, tradeCaption);
+  const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
+  await safeSendSticker(bot, dirSticker);
+
+  const finalChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, `M1 • ${entryTimeStr} (UTC+6) • CONFIDENCE ${signal.aiScore}% • LIVE MARKET`);
+  const finalCaption = buildFinalSignalCaption(signal, flag, entryPrice, entryTimeStr, badgeType);
+
+  if (finalChart) {
+    await safeSendPhoto(bot, finalChart, finalCaption);
   } else {
-    await safeSendMessage(bot, tradeCaption, { parse_mode: 'Markdown' });
+    await safeSendMessage(bot, finalCaption, { parse_mode: 'Markdown' });
   }
 
-  // ━━━ STEP 4: WAIT FOR CLOSE & GET RESULT (xx:xx:58-59) ━━━
+  // ━━━ STEP 5: Wait for close & get result ━━━
   console.log(`⏳ Waiting for candle close...`);
   await waitForCandleClose();
   await sleep(1500);
@@ -949,16 +1112,16 @@ async function runSignalRound(bot, signal, isMTG = false) {
   try {
     const p = await getCurrentPrice(signal.symbol);
     if (p) exitPrice = p;
-  } catch(e) {
+  } catch (e) {
     console.log(`⚠️ Exit price fetch failed: ${e.message}`);
   }
 
   console.log(`💰 Exit Price: ${exitPrice}`);
 
-  // ✅ CORRECT LOGIC: Open vs Close comparison (same candle)
-  const isWin = (signal.direction === 'CALL' && exitPrice > entryPrice) || 
-                (signal.direction === 'PUT' && exitPrice < entryPrice);
-  
+  // ✅ FIXED: compare against UP/DOWN (previously compared against 'CALL'/'PUT' — always false)
+  const isWin = (signal.direction === 'UP' && exitPrice > entryPrice) ||
+                (signal.direction === 'DOWN' && exitPrice < entryPrice);
+
   console.log(`📊 ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}${isMTG ? ' (MTG)' : ''}`);
 
   if (!isMTG) {
@@ -967,11 +1130,11 @@ async function runSignalRound(bot, signal, isMTG = false) {
   }
   tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
-  // ━━━ STEP 5: RESULT MESSAGE ━━━
+  // ━━━ STEP 6: Result Message ━━━
   if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
   await safeSendMessage(bot, buildResultMessage(signal, flag, entryPrice, exitPrice, isWin), { parse_mode: 'Markdown' });
 
-  return { isWin, entryPrice, exitPrice, flag };
+  return { isWin, entryPrice, exitPrice, flag, cancelled: false };
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -990,6 +1153,11 @@ async function sendProSignal(bot, signal) {
     // ━━━ MAIN ROUND ━━━
     const main = await runSignalRound(bot, signal, false);
 
+    if (main.cancelled) {
+      // No trade was placed — nothing to recover, just let outer loop find a new setup.
+      return null;
+    }
+
     if (main.isWin) {
       return true;
     }
@@ -1007,7 +1175,7 @@ async function sendProSignal(bot, signal) {
     console.log(`⏳ MTG wait: ${Math.round(mtgWaitMs / 1000)}s`);
     await sleep(mtgWaitMs);
 
-    // Re-analyze same pair for MTG
+    // Re-analyze same pair for MTG (fresh silent analysis)
     let mtgData = signal;
     try {
       const fresh = await analyzeSymbol(signal.symbol, false);
@@ -1017,8 +1185,9 @@ async function sendProSignal(bot, signal) {
       console.log(`⚠️ MTG re-analysis failed: ${e.message}`);
     }
 
-    // MTG Round
+    // MTG Round — goes through the same verify → single-message → result pipeline
     const mtgResult = await runSignalRound(bot, mtgData, true);
+    if (mtgResult.cancelled) return null;
     return mtgResult.isWin;
 
   } catch (error) {
@@ -1113,6 +1282,9 @@ async function runSession(bot, sessionName, isManual = false) {
           lastSignalTime = Date.now();
           if (isWin) { winCount++; currentWinStreak++; }
           else { lossCount++; currentWinStreak = 0; }
+        } else {
+          // cancelled / error — small cooldown before trying a fresh setup
+          await sleep(30 * 1000);
         }
       } catch (e) {
         console.error(`❌ Signal error: ${e.message}`);
@@ -1134,7 +1306,7 @@ async function runSession(bot, sessionName, isManual = false) {
         `🟢 **WIN:** ${winCount}\n` +
         `🔴 **LOSS:** ${lossCount}\n\n` +
         `💬 **Feedback:** @AkiL_xD\n` +
-        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬**`,
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟭𝟬.𝟬**`,
         { parse_mode: 'Markdown' }
       );
     } else {
@@ -1145,7 +1317,7 @@ async function runSession(bot, sessionName, isManual = false) {
         `🔴 **LOSS:** ${lossCount}\n\n` +
         `🙏 **Thank You for Staying With Us.**\n` +
         `📅 **We'll Be Back With Better Setups.**\n\n` +
-        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟵.𝟬**`,
+        `🤖 **𝗤𝗫 𝗔𝗜 𝗧𝗥𝗔𝗗𝗘𝗥 𝗩𝟭𝟬.𝟬**`,
         { parse_mode: 'Markdown' }
       );
     }
@@ -1169,7 +1341,7 @@ async function runSession(bot, sessionName, isManual = false) {
 module.exports = function (bot) {
   if (schedulerInitialized) { console.log('⚠️ Scheduler already initialized'); return; }
   schedulerInitialized = true;
-  console.log('✅ Scheduler started (v9.0 — Real Candle Workflow: Analysis → Direction → Trade Start → Result)');
+  console.log('✅ Scheduler started (v10.0 — Silent Analysis → 45s Re-Verify → ONE Final Signal → Result)');
 
   if (schedulerInterval) clearInterval(schedulerInterval);
 
@@ -1182,7 +1354,7 @@ module.exports = function (bot) {
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `⏰ **Afternoon Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕑 ২:०० টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `⏰ **Afternoon Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕑 ২:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
@@ -1199,7 +1371,7 @@ module.exports = function (bot) {
         if (!sentReminders.has(key)) {
           sentReminders.set(key, Date.now());
           await safeSendMessage(bot,
-            `🌙 **Night Session শুরু হবে ३० মিনিট পরে!**\n\n🕘 রাত ९:०० টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
+            `🌙 **Night Session শুরু হবে ৩০ মিনিট পরে!**\n\n🕘 রাত ৯:০০ টায় (BD Time)\n📊 সবাই রেডি থাকুন! ✅`,
             { parse_mode: 'Markdown' }
           );
         }
