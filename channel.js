@@ -1,4 +1,4 @@
-// channel.js - Qx AI Predictor VIP (v5.1 - 20 High Accuracy Indicators + Daily Report)
+// channel.js - Qx AI Predictor VIP (v5.2 - 20 High Accuracy Indicators + Daily Report + Emergency Mode support)
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
@@ -6,7 +6,6 @@ const path = require('path');
 const CHANNEL_ID = '-1002427080688';
 const ADMIN_ID = 5724602667;
 
-// ✅ ১০টা API key rotation
 const API_KEYS = [
   process.env.TWELVE_DATA_KEY_1,
   process.env.TWELVE_DATA_KEY_2,
@@ -33,7 +32,6 @@ const MAX_GAP = 15 * 60 * 1000;
 const CONFIRM_LIMIT = 5;
 const STALE_MINUTES = 5;
 
-// ✅ ৮টা pair — ৪+৪ rotation
 const pairGroups = [
   [
     { live: 'EUR/USD', otc: 'EUR/USD OTC', flag: '🇪🇺🇺🇸' },
@@ -56,7 +54,6 @@ let liveCount = 0;
 let noLiveCount = 0;
 let lastSignalKey = '';
 
-// ✅ নতুন — ডেইলি স্ট্যাটস ট্র্যাকিং
 let dailyStats = { dateKey: null, total: 0, wins: 0, losses: 0 };
 let reportSentDateKey = null;
 
@@ -75,7 +72,6 @@ function getBDTime() {
   };
 }
 
-// ✅ নতুন — বর্তমান BD তারিখ (YYYY-MM-DD) ও রিপোর্ট ডেট ফরম্যাটিং হেল্পার
 function currentDateKey() {
   const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
   return `${bd.getUTCFullYear()}-${String(bd.getUTCMonth() + 1).padStart(2, '0')}-${String(bd.getUTCDate()).padStart(2, '0')}`;
@@ -87,8 +83,6 @@ function formatReportDate(dateKeyStr) {
   return `${d} ${months[mo - 1]} ${y}`;
 }
 
-// ✅ নতুন — যেকোনো টেক্সটকে Mathematical Sans-Bold Unicode এ কনভার্ট করার হেল্পার
-// (এটা দিয়ে ডাইনামিক ভ্যালু যেমন তারিখ, সংখ্যা, win rate ইত্যাদিও ঠিক একই বোল্ড স্টাইলে দেখানো যায়)
 function toBoldSans(str) {
   return String(str).split('').map(ch => {
     const code = ch.charCodeAt(0);
@@ -121,8 +115,6 @@ function isLiveMarketOpen() {
   return true;
 }
 
-// ✅ পরিবর্তিত — মধ্যরাতে পজ উইন্ডো এখন ১২:০০ থেকে ১২:১৯ পর্যন্ত (আগে ছিল ১২:০০-১২:০২)
-// এতে ৪ মিনিট sleep + রিপোর্ট পাঠানোর সময় + ১২:২০ এ আবার শুরু হওয়ার পুরো ফ্লো কভার হয়
 function isRolloverTime() {
   const { hour, minute } = getBDTime();
   if (hour === 23 && minute >= 58) return true;
@@ -175,10 +167,6 @@ function buildHigherTF(candles1m, period) {
   }
   return result;
 }
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📈 ২০টি হাই-অ্যাকুরেসি ইন্ডিকেটর
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function calcRSI(candles, period = 14) {
   if (candles.length < period + 1) return 50;
@@ -433,10 +421,6 @@ function calcTrendStrength(candles) {
   return { dir: up > dn ? 'UP' : 'DOWN', up, dn, isStrong: up >= 5 || dn >= 5 };
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🔍 FULL ANALYSIS (20 Indicators)
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
 async function smartAnalyze(pair, forceOTC = false) {
   let candles1m;
   let isLive = false;
@@ -598,13 +582,9 @@ async function smartAnalyze(pair, forceOTC = false) {
     isLive,
     directionsAgree,
     adx: adx.adx,
-    currentPrice: last   // ✅ নতুন — win/loss চেকের জন্য entry price হিসেবে ব্যবহার হবে
+    currentPrice: last
   };
 }
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📨 NEW SIGNAL MESSAGE FORMAT
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function buildSignalMessage(best, entry, expiry) {
   const dirLabel = best.direction === 'UP' ? '🟢 𝗕𝗨𝗬' : '🔴 𝗦𝗘𝗟𝗟';
@@ -626,7 +606,6 @@ function buildSignalMessage(best, entry, expiry) {
   );
 }
 
-// ✅ নতুন — ডেইলি রিপোর্ট মেসেজ বিল্ডার
 function buildDailyReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentDateKey());
   const { total, wins, losses } = dailyStats;
@@ -647,17 +626,15 @@ function buildDailyReport() {
   );
 }
 
-// ✅ নতুন — সিগন্যাল পাঠানোর পর ব্যাকগ্রাউন্ডে win/loss যাচাই (মূল ফ্লো ব্লক করে না)
 async function checkSignalResult(signal) {
-  await new Promise(r => setTimeout(r, 70 * 1000)); // ~1 মিনিট এক্সপায়ারি + বাফার
+  await new Promise(r => setTimeout(r, 70 * 1000));
 
   try {
-    const symbol = signal.pair.replace(' OTC', ''); // TwelveData তে সবসময় লাইভ সিম্বল ফরম্যাটই ব্যবহৃত হয়
+    const symbol = signal.pair.replace(' OTC', '');
     const freshCandles = await getCandles(symbol);
     const exitPrice = freshCandles[freshCandles.length - 1].close;
     const isWin = signal.direction === 'UP' ? exitPrice > signal.currentPrice : exitPrice < signal.currentPrice;
 
-    // যদি দিনের মাঝপথে dateKey পরিবর্তন হয়ে যায় (নিরাপত্তার জন্য)
     const nowKey = currentDateKey();
     if (dailyStats.dateKey !== nowKey) {
       dailyStats = { dateKey: nowKey, total: 0, wins: 0, losses: 0 };
@@ -671,10 +648,6 @@ async function checkSignalResult(signal) {
     console.log('⚠️ Could not verify result for', signal.pair, '-', e.message);
   }
 }
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 TIMEFRAME ANALYSIS
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function analyzeTimeframe(candles) {
   const rsi = calcRSI(candles);
@@ -697,20 +670,22 @@ function analyzeTimeframe(candles) {
   return { direction, ratio, volatility, isStrongTrend: trend.isStrong };
 }
 
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 🏁 MAIN MODULE
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
-module.exports = function(bot, newsModule) {
-  console.log('✅ Qx AI Predictor VIP v5.1 — 20 Indicators + Daily Report started!');
+// ✅ নতুন — শেষ প্যারামিটার হিসেবে isEmergency (একটা function) যোগ হলো
+module.exports = function(bot, newsModule, isEmergency) {
+  console.log('✅ Qx AI Predictor VIP v5.2 — 20 Indicators + Daily Report + Emergency Mode support started!');
 
   async function run() {
+    // ✅ নতুন — Emergency Mode চালু থাকলে চ্যানেলে কোনো সিগন্যাল যাবে না
+    if (typeof isEmergency === 'function' && isEmergency()) {
+      console.log('🛑 Emergency mode — channel signal scan skipped');
+      return;
+    }
+
     if (newsModule && newsModule.isNewsActive()) {
       console.log('📰 News active — skip');
       return;
     }
 
-    // ✅ নতুন — মধ্যরাতে ডেইলি রিপোর্ট (isRolloverTime চেকের আগে বসাতে হবে, নাহলে স্কিপ হয়ে যাবে)
     const bdNow = getBDTime();
     const dateKeyNow = currentDateKey();
     if (bdNow.hour === 0 && bdNow.minute >= 5 && bdNow.minute <= 9 && reportSentDateKey !== dateKeyNow) {
@@ -813,7 +788,6 @@ module.exports = function(bot, newsModule) {
       lastSignalKey = signalKey;
       console.log(`✅ Signal: ${best.pair} | ${best.aiScore}% | ${best.confidence} | ${best.isLive ? 'LIVE 🟢' : 'OTC 🔴'} | Agree: ${best.directionsAgree}/7`);
 
-      // ✅ শুধু Live (real market) সিগন্যালই ডেইলি স্ট্যাটসে কাউন্ট হবে, OTC বাদ
       if (best.isLive) {
         checkSignalResult(best).catch(e => console.log('Result check error:', e.message));
       } else {
