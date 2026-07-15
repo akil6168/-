@@ -1,12 +1,30 @@
-// v23 - Free Trial(3) + Deposit-Based Affiliate Verify + XAdmin Test Panel + Real Candle-Based Result Tracking
+// v24 - Free Trial(3) + Deposit-Based Affiliate Verify + XAdmin FULL Control Panel + Real Candle-Based Result Tracking
 const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
 const twelveData = require('./twelvedata');
+const geminiKeyPool = require('./geminikey');
 
 const TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
 const bot = new TelegramBot(TOKEN, { polling: false });
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🚨 ERROR LOG BUFFER — /xadmin এর "Error Logs" বাটনের জন্য (সর্বশেষ ২০টা)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+const errorLogBuffer = [];
+const _origConsoleError = console.error.bind(console);
+console.error = function (...args) {
+  try {
+    const msg = args.map(a => (a instanceof Error ? (a.stack || a.message) : (typeof a === 'string' ? a : JSON.stringify(a)))).join(' ');
+    const bd = new Date(Date.now() + 6 * 60 * 60 * 1000);
+    const timeStr = String(bd.getUTCHours()).padStart(2, '0') + ':' + String(bd.getUTCMinutes()).padStart(2, '0') + ':' + String(bd.getUTCSeconds()).padStart(2, '0');
+    errorLogBuffer.push('[' + timeStr + '] ' + msg);
+    if (errorLogBuffer.length > 20) errorLogBuffer.shift();
+  } catch (e) {}
+  _origConsoleError(...args);
+};
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🛡️ SAFETY PATCH — খালি text পাঠানো ঠেকানো + crash বন্ধ করা
@@ -46,9 +64,10 @@ process.on('uncaughtException', (err) => {
 const ADMIN_ID = 5724602667;
 const FREE_TRIAL_SIGNAL = 3;
 const FREE_TRIAL_SCREENSHOT = 3;
-const MIN_DEPOSIT_USD = 10; // ✅ নতুন — verify হতে হলে ন্যূনতম এই পরিমাণ deposit লাগবে
+const MIN_DEPOSIT_USD = 10;
 
 let maintenanceMode = false;
+let emergencyMode = false; // ✅ নতুন — Maintenance থেকেও শক্তিশালী, সব Signal/Screenshot/Session বন্ধ করে দেয়
 
 let startedUsers = new Set();
 let approvedUsers = new Set([ADMIN_ID]);
@@ -67,13 +86,22 @@ const delAffiliateMode = new Set();
 const messageUserMode = new Set();
 const pendingMessageTarget = new Map();
 
-// ✅ নতুন — /xadmin টেস্ট প্যানেলের জন্য state
+// ✅ /xadmin — বিদ্যমান state
 const xadminRegMode = new Set();
 const xadminDepositMode = new Set();
 const xadminCheckMode = new Set();
 const xadminResetMode = new Set();
 const xadminTrialResetMode = new Set();
 const xadminForceApproveMode = new Set();
+
+// ✅ নতুন — /xadmin এর নতুন ফিচারগুলোর জন্য state
+const xadminRegisterUserMode = new Set();
+const xadminUserStatusMode = new Set();
+const xadminDeleteTestDataMode = new Set();
+const xadminEditDepositMode = new Set();
+
+// ✅ নতুন — Submissions লিস্ট দেখা ও মুছে ফেলার জন্য state
+const deleteSubmissionMode = new Set();
 
 let sessionModule;
 const lastSignalMsgId = new Map();
@@ -139,7 +167,6 @@ function getUserStats(userId) {
   return userDailyStats.get(userId);
 }
 
-// ✅ পরিবর্তিত — Win Rate যোগ করা হয়েছে
 function buildDailyAdminReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentBDDateKey());
   const totalCompleted = dailyStats.directWin + dailyStats.mtgWin + dailyStats.loss;
@@ -177,7 +204,7 @@ function buildDailyAdminReport() {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// ✅ Real Candle-Based Result Tracking (getCurrentPrice/live price ব্যবহার হয় না)
+// ✅ Real Candle-Based Result Tracking
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 function formatUTCDateTime(d) {
@@ -657,6 +684,10 @@ bot.onText(/\/start/, async (msg) => {
   const userId = msg.from.id;
   const usernameHandle = msg.from.username || null;
 
+  if (userId !== ADMIN_ID && emergencyMode) {
+    await bot.sendMessage(chatId, '🛑 *Bot এখন Emergency Mode এ আছে।*\n\n⏳ একটু পর আবার চেষ্টা করুন।', { parse_mode: 'Markdown' });
+    return;
+  }
   if (userId !== ADMIN_ID && maintenanceMode) {
     await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
@@ -757,6 +788,7 @@ bot.onText(/\/start/, async (msg) => {
 bot.onText(/\/menu/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+  if (userId !== ADMIN_ID && emergencyMode) { await bot.sendMessage(chatId, '🛑 *Bot এখন Emergency Mode এ আছে।*', { parse_mode: 'Markdown' }); return; }
   if (userId !== ADMIN_ID && maintenanceMode) { await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*', { parse_mode: 'Markdown' }); return; }
   if (bannedUsers.has(userId)) { await bot.sendMessage(chatId, '🚫 আপনাকে ban করা হয়েছে।'); return; }
   if (!isApproved(userId) && getTrialSignalLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
@@ -775,6 +807,7 @@ bot.onText(/\/admin/, async (msg) => {
         inline_keyboard: [
           [{ text: '👥 Users', callback_data: 'admin_total' }, { text: '📊 Report', callback_data: 'admin_report_now' }],
           [{ text: '✅ Approved', callback_data: 'admin_approved' }, { text: '⚡ Affiliates', callback_data: 'admin_affiliate' }],
+          [{ text: '📋 Submissions', callback_data: 'admin_submissions' }, { text: '🗑️ Delete Submission', callback_data: 'admin_delete_submission_prompt' }],
           [{ text: '❌ Remove Aff', callback_data: 'admin_delaffiliate_prompt' }, { text: '💬 Message', callback_data: 'admin_message_prompt' }],
           [{ text: '📢 Broadcast', callback_data: 'admin_broadcast' }, { text: '🚀 Session', callback_data: 'admin_session_start' }],
           [{ text: '🚫 Ban', callback_data: 'admin_ban_prompt' }, { text: '✅ Unban', callback_data: 'admin_unban_prompt' }],
@@ -785,29 +818,32 @@ bot.onText(/\/admin/, async (msg) => {
   );
 });
 
-// ✅ নতুন — /xadmin টেস্ট প্যানেল
+// ✅ /xadmin — FULL TEST & CONTROL PANEL (v2)
 bot.onText(/\/xadmin/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
+  const emStatus = emergencyMode ? '🛑 ON' : '✅ OFF';
   await bot.sendMessage(ADMIN_ID,
-    '🧪 *𝗫𝗔𝗗𝗠𝗜𝗡 — 𝗧𝗘𝗦𝗧 𝗣𝗔𝗡𝗘𝗟*\n══════════════════\n' +
-    'এখানে বাস্তব postback/deposit ছাড়াই সব টেস্ট করা যাবে।',
+    '🧪 *𝗫𝗔𝗗𝗠𝗜𝗡 — 𝗧𝗘𝗦𝗧 𝗔𝗡𝗗 𝗖𝗢𝗡𝗧𝗥𝗢𝗟 𝗣𝗔𝗡𝗘𝗟*\n══════════════════\n' +
+    '🛑 Emergency Mode: ' + emStatus,
     {
       parse_mode: 'Markdown',
       reply_markup: {
         inline_keyboard: [
-          [{ text: '📝 Simulate Registration', callback_data: 'xadmin_reg' }],
-          [{ text: '💰 Simulate Deposit', callback_data: 'xadmin_deposit' }],
-          [{ text: '🔍 Check Trader Status', callback_data: 'xadmin_check' }],
-          [{ text: '🗑️ Reset Trader Test Data', callback_data: 'xadmin_reset' }],
-          [{ text: '🔄 Reset User Trial Count', callback_data: 'xadmin_trial_reset' }],
-          [{ text: '⚡ Force Approve User', callback_data: 'xadmin_force_approve' }]
+          [{ text: '✍️ Register User', callback_data: 'xadmin_reguser' }, { text: '💵 Complete Deposit', callback_data: 'xadmin_deposit' }],
+          [{ text: '📊 View User Status', callback_data: 'xadmin_userstatus' }, { text: '🎁 Reset Free Trial', callback_data: 'xadmin_trial_reset' }],
+          [{ text: '✅ Approve User', callback_data: 'xadmin_force_approve' }, { text: '🗑 Delete Test Data', callback_data: 'xadmin_delete_testdata' }],
+          [{ text: '▶ Start Session', callback_data: 'admin_session_start' }, { text: '⏸ Pause Session', callback_data: 'xadmin_session_pause' }],
+          [{ text: '⏹ Stop Session', callback_data: 'xadmin_session_stop' }, { text: '🧹 Clean Database', callback_data: 'xadmin_clean_db' }],
+          [{ text: '🩺 API Health Check', callback_data: 'xadmin_health' }, { text: emergencyMode ? '🟢 Disable Emergency' : '🛑 Emergency Mode', callback_data: 'xadmin_emergency' }],
+          [{ text: '🚨 Error Logs', callback_data: 'xadmin_errorlogs' }, { text: '🔍 Search Trader ID', callback_data: 'xadmin_check' }],
+          [{ text: '💰 Edit Deposit', callback_data: 'xadmin_editdeposit' }]
         ]
       }
     }
   );
 });
 
-// /approve — এখনো manual override হিসেবে available (edge case handling)
+// /approve
 bot.onText(/\/approve (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const targetId = parseInt(match[1].trim());
@@ -851,6 +887,7 @@ bot.onText(/\/ban (.+)/, async (msg, match) => {
 // /sessionstart
 bot.onText(/\/sessionstart/, async (msg) => {
   if (msg.from.id !== ADMIN_ID) return;
+  if (emergencyMode) { await bot.sendMessage(ADMIN_ID, '🛑 Emergency Mode চালু আছে, Session শুরু করা যাবে না।'); return; }
   if (!sessionModule) { await bot.sendMessage(ADMIN_ID, '❌ Session module এখনো লোড হয়নি, একটু পর চেষ্টা করুন।'); return; }
   if (sessionModule.isSessionRunning()) {
     await bot.sendMessage(ADMIN_ID, '⚠️ একটা session ইতিমধ্যে চলছে। শেষ হওয়া পর্যন্ত অপেক্ষা করুন।');
@@ -876,7 +913,7 @@ bot.onText(/\/msg (\d+) ([\s\S]+)/, async (msg, match) => {
   }
 });
 
-// /delaffiliate — affiliateVerified কালেকশন থেকে একটা traderId এন্ট্রি মুছে ফেলা (টেস্ট/ভুল এন্ট্রি cleanup এর জন্য)
+// /delaffiliate
 bot.onText(/\/delaffiliate (.+)/, async (msg, match) => {
   if (msg.from.id !== ADMIN_ID) return;
   const traderId = match[1].trim();
@@ -911,6 +948,10 @@ bot.on('message', async (msg) => {
 
   if (!text || text.startsWith('/')) return;
 
+  if (userId !== ADMIN_ID && emergencyMode) {
+    await bot.sendMessage(chatId, '🛑 *Bot এখন Emergency Mode এ আছে।*\n\n⏳ একটু পর আবার চেষ্টা করুন।', { parse_mode: 'Markdown' });
+    return;
+  }
   if (userId !== ADMIN_ID && maintenanceMode) {
     await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*\n\n⏳ কিছুক্ষণ পর আবার চালু হবে।', { parse_mode: 'Markdown' });
     return;
@@ -981,6 +1022,33 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  if (deleteSubmissionMode.has(userId) && userId === ADMIN_ID) {
+    deleteSubmissionMode.delete(userId);
+    const input = text.trim();
+    const asUserId = parseInt(input);
+    const isUserId = !isNaN(asUserId) && String(asUserId) === input;
+
+    const filterFn = isUserId ? (s => s.userId === asUserId) : (s => s.traderId === input);
+    const matchCount = submissions.filter(filterFn).length;
+
+    if (matchCount === 0) {
+      await bot.sendMessage(ADMIN_ID, '⚠️ এই ' + (isUserId ? 'User ID' : 'Trader ID') + ' `' + input + '` দিয়ে কোনো Submission পাওয়া যায়নি।', { parse_mode: 'Markdown' });
+      return;
+    }
+
+    submissions = submissions.filter(s => !filterFn(s));
+    if (db) {
+      const query = isUserId ? { userId: asUserId } : { traderId: input };
+      await db.collection('submissions').deleteMany(query);
+    }
+
+    await bot.sendMessage(ADMIN_ID,
+      '✅ *Submission মুছে ফেলা হয়েছে!*\n\n🔍 ' + (isUserId ? 'User ID' : 'Trader ID') + ': `' + input + '`\n🗑️ Removed: ' + matchCount + ' টি entry',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
   if (delAffiliateMode.has(userId) && userId === ADMIN_ID) {
     delAffiliateMode.delete(userId);
     const traderId = text.trim();
@@ -1005,7 +1073,7 @@ bot.on('message', async (msg) => {
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ নতুন — /xadmin টেস্ট প্যানেলের মেসেজ হ্যান্ডলার
+  // ✅ /xadmin — বিদ্যমান মেসেজ হ্যান্ডলার
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   if (xadminRegMode.has(userId) && userId === ADMIN_ID) {
@@ -1109,6 +1177,106 @@ bot.on('message', async (msg) => {
     return;
   }
 
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ নতুন — /xadmin এর নতুন ফিচারগুলোর মেসেজ হ্যান্ডলার
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  if (xadminRegisterUserMode.has(userId) && userId === ADMIN_ID) {
+    xadminRegisterUserMode.delete(userId);
+    const parts = text.trim().split(/\s+/);
+    const targetId = parseInt(parts[0]);
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+    const fname = parts.slice(1).join(' ') || 'Manual Test User';
+    await addStartedUser(targetId, null, fname);
+    await bot.sendMessage(ADMIN_ID,
+      '✅ User ম্যানুয়ালি Register হলো (bot এর স্বাভাবিক /start flow অনুযায়ী)!\n\n🆔 User ID: `' + targetId + '`\n👤 Name: ' + fname,
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (xadminUserStatusMode.has(userId) && userId === ADMIN_ID) {
+    xadminUserStatusMode.delete(userId);
+    const targetId = parseInt(text.trim());
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+
+    const sub = submissions.find(s => s.userId === targetId);
+    const traderId = sub ? sub.traderId : null;
+    let affRec = null;
+    if (traderId && db) affRec = await db.collection('affiliateVerified').findOne({ traderId });
+
+    const statusText =
+      '📊 *𝗨𝗦𝗘𝗥 𝗦𝗧𝗔𝗧𝗨𝗦*\n\n' +
+      '🆔 User ID: `' + targetId + '`\n' +
+      '📝 Started Bot: ' + (startedUsers.has(targetId) ? '✅' : '❌') + '\n' +
+      '✅ Approved: ' + (isApproved(targetId) ? '✅' : '❌') + '\n' +
+      '🚫 Banned: ' + (bannedUsers.has(targetId) ? '✅' : '❌') + '\n' +
+      '📈 Trial Signal Left: ' + getTrialSignalLeft(targetId) + '/' + FREE_TRIAL_SIGNAL + '\n' +
+      '📸 Trial Screenshot Left: ' + getTrialScreenshotLeft(targetId) + '/' + FREE_TRIAL_SCREENSHOT + '\n\n' +
+      '📌 Trader ID: ' + (traderId ? '`' + traderId + '`' : 'N/A') + '\n' +
+      (affRec ?
+        '📝 Registered: ' + (affRec.registered ? '✅' : '❌') + '\n' +
+        '💰 Deposit: $' + (affRec.depositAmount ? affRec.depositAmount.toFixed(2) : '0.00') + '\n' +
+        '🎯 Verified: ' + (affRec.verified ? '✅' : '❌') + '\n' +
+        '🧪 Type: ' + (affRec.isTest ? 'Test' : 'Real') + '\n'
+        : '⚠️ কোনো Affiliate ডেটা নেই\n');
+
+    await bot.sendMessage(ADMIN_ID, statusText, { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (xadminDeleteTestDataMode.has(userId) && userId === ADMIN_ID) {
+    xadminDeleteTestDataMode.delete(userId);
+    const targetId = parseInt(text.trim());
+    if (isNaN(targetId)) { await bot.sendMessage(ADMIN_ID, '❌ ভুল User ID।'); return; }
+
+    let removedParts = [];
+
+    trialSignalCount.delete(targetId);
+    trialScreenshotCount.delete(targetId);
+    if (db) await db.collection('trialCounts').deleteOne({ userId: targetId });
+    removedParts.push('Trial Counters');
+
+    const sub = submissions.find(s => s.userId === targetId);
+    if (sub && sub.traderId && db) {
+      const affRec = await db.collection('affiliateVerified').findOne({ traderId: sub.traderId });
+      if (affRec && affRec.isTest) {
+        await db.collection('affiliateVerified').deleteOne({ traderId: sub.traderId });
+        removedParts.push('Affiliate Test Entry (`' + sub.traderId + '`)');
+      }
+    }
+
+    await bot.sendMessage(ADMIN_ID,
+      '🗑️ *Test Data ক্লিন করা হলো!*\n\n🆔 User ID: `' + targetId + '`\n✅ Removed: ' + removedParts.join(', ') +
+      '\n\n⚠️ Note: এই User যদি Approve করা থাকে, সেটা এখান থেকে বাতিল হয়নি (নিরাপত্তার জন্য)। প্রয়োজনে ❌ Unapprove আলাদাভাবে ব্যবহার করুন।',
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (xadminEditDepositMode.has(userId) && userId === ADMIN_ID) {
+    xadminEditDepositMode.delete(userId);
+    const parts = text.trim().split(/\s+/);
+    if (parts.length < 2 || isNaN(parseFloat(parts[1]))) {
+      await bot.sendMessage(ADMIN_ID, '❌ ভুল ফরম্যাট। এভাবে পাঠাও: `12345678 15`', { parse_mode: 'Markdown' });
+      return;
+    }
+    const traderId = parts[0];
+    const newAmount = parseFloat(parts[1]);
+    const verified = newAmount >= MIN_DEPOSIT_USD;
+    await db.collection('affiliateVerified').updateOne(
+      { traderId },
+      { $set: { traderId, registered: true, depositAmount: newAmount, verified, editedAt: new Date() } },
+      { upsert: true }
+    );
+    await bot.sendMessage(ADMIN_ID,
+      '💰 *Deposit Amount আপডেট হলো!*\n\n📌 Trader ID: `' + traderId + '`\n💵 New Amount: $' + newAmount.toFixed(2) + '\n' +
+      (verified ? '🟢 Verified ✅' : '🟡 এখনো $' + MIN_DEPOSIT_USD + ' এর কম'),
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
   if (passwordMode.has(userId)) {
     const correctPass = passwordMode.get(userId);
     if (text === correctPass) {
@@ -1147,10 +1315,6 @@ bot.on('message', async (msg) => {
 
   const affRecord = await db.collection('affiliateVerified').findOne({ traderId: text });
 
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ পরিবর্তিত — এখন শুধু registration যথেষ্ট না, deposit ≥ MIN_DEPOSIT_USD ও লাগবে
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-
   if (affRecord && affRecord.registered) {
     const totalDeposit = affRecord.depositAmount || 0;
 
@@ -1178,7 +1342,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // registered + deposit থ্রেশহোল্ড পার — ফুল ভেরিফাই
     const apiKey = generateApiKey();
     passwordMode.set(userId, apiKey);
     await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString(), autoVerified: true, depositAmount: totalDeposit });
@@ -1195,9 +1358,6 @@ bot.on('message', async (msg) => {
     return;
   }
 
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ ভুল/না-মেলা Trader ID হলে সরাসরি ইউজারকে জানানো
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   await addSubmission({ userId, name: firstName, username: usernameHandle, traderId: text, time: new Date().toISOString() });
 
   await bot.sendMessage(chatId,
@@ -1220,6 +1380,10 @@ bot.on('message', async (msg) => {
 const signalInProgress = new Set();
 
 async function generateSignalForPair(chatId, userId, pair) {
+  if (emergencyMode) {
+    await bot.sendMessage(chatId, '🛑 Emergency Mode চালু আছে, এখন কোনো Signal দেওয়া যাচ্ছে না।');
+    return;
+  }
   if (signalInProgress.has(userId)) {
     await bot.sendMessage(chatId, '⏳ আপনার আগের request এখনো process হচ্ছে, একটু অপেক্ষা করুন...');
     return;
@@ -1299,6 +1463,10 @@ bot.on('callback_query', async (query) => {
   const pair = query.data;
   bot.answerCallbackQuery(query.id);
 
+  if (userId !== ADMIN_ID && emergencyMode) {
+    await bot.sendMessage(chatId, '🛑 *Bot এখন Emergency Mode এ আছে।*', { parse_mode: 'Markdown' });
+    return;
+  }
   if (userId !== ADMIN_ID && maintenanceMode) {
     await bot.sendMessage(chatId, '🔧 *Bot Maintenance চলছে...*', { parse_mode: 'Markdown' });
     return;
@@ -1311,6 +1479,7 @@ bot.on('callback_query', async (query) => {
   }
 
   if (pair === 'screenshot_analysis') {
+    if (emergencyMode) { await bot.sendMessage(chatId, '🛑 Emergency Mode চালু আছে, এখন Screenshot Analysis বন্ধ আছে।'); return; }
     if (!isApproved(userId)) {
       if (getTrialScreenshotLeft(userId) <= 0) { sendVerifyPrompt(chatId); return; }
     }
@@ -1377,13 +1546,22 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'admin_submissions' && userId === ADMIN_ID) {
     if (submissions.length === 0) { await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।'); return; }
-    let text = '📋 *TRADER ID SUBMISSIONS*\n\n';
-    submissions.forEach((s, i) => {
+    // ✅ সর্বশেষ ৪০টা দেখাবে (পুরনোগুলো নিচে চাপা পড়ে থাকে, বেশি হলে মেসেজ অনেক বড় হয়ে যায়)
+    const recent = submissions.slice(-40).reverse();
+    let text = '📋 *TRADER ID SUBMISSIONS* (সর্বশেষ ' + recent.length + '/' + submissions.length + ')\n\n';
+    recent.forEach((s, i) => {
       const uname = mentionUser(s.userId, s.username, s.name);
-      const autoTag = s.autoVerified ? ' ⚡' : '';
+      const autoTag = s.autoVerified ? ' ⚡' : (s.pendingDeposit ? ' ⏳' : '');
       text += (i + 1) + '. ' + uname + autoTag + '\n🆔 User: `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
     });
-    await bot.sendMessage(ADMIN_ID, text, { parse_mode: 'Markdown' });
+    text += '━━━━━━━━━━━━━━━━\n🗑️ মুছতে চাইলে "🗑️ Delete Submission" বাটন ব্যবহার করে *User ID* অথবা *Trader ID* পাঠাও।';
+    await bot.sendMessage(ADMIN_ID, text.slice(0, 4000), { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'admin_delete_submission_prompt' && userId === ADMIN_ID) {
+    deleteSubmissionMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🗑️ যে Submission মুছতে চাও তার *User ID* অথবা *Trader ID* পাঠাও:\n\n⚠️ একই User ID/Trader ID দিয়ে একাধিক submission থাকলে সবগুলোই মুছে যাবে।', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -1423,6 +1601,7 @@ bot.on('callback_query', async (query) => {
   }
 
   if (pair === 'admin_session_start' && userId === ADMIN_ID) {
+    if (emergencyMode) { await bot.sendMessage(ADMIN_ID, '🛑 Emergency Mode চালু আছে, Session শুরু করা যাবে না।'); return; }
     if (!sessionModule) { await bot.sendMessage(ADMIN_ID, '❌ Session module এখনো লোড হয়নি, একটু পর চেষ্টা করুন।'); return; }
     if (sessionModule.isSessionRunning()) {
       await bot.sendMessage(ADMIN_ID, '⚠️ একটা session ইতিমধ্যে চলছে। শেষ হওয়া পর্যন্ত অপেক্ষা করুন।');
@@ -1488,7 +1667,7 @@ bot.on('callback_query', async (query) => {
   }
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  // ✅ নতুন — /xadmin টেস্ট প্যানেলের callback হ্যান্ডলার
+  // ✅ /xadmin — বিদ্যমান callback হ্যান্ডলার
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   if (pair === 'xadmin_reg' && userId === ADMIN_ID) {
@@ -1517,13 +1696,142 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'xadmin_trial_reset' && userId === ADMIN_ID) {
     xadminTrialResetMode.add(ADMIN_ID);
-    await bot.sendMessage(ADMIN_ID, '🔄 যে User ID এর trial count reset করতে চাও (নতুন করে trial টেস্ট করার জন্য) সেটা পাঠাও:');
+    await bot.sendMessage(ADMIN_ID, '🎁 যে User ID এর Free Trial reset করতে চাও (নতুন করে trial টেস্ট করার জন্য) সেটা পাঠাও:');
     return;
   }
 
   if (pair === 'xadmin_force_approve' && userId === ADMIN_ID) {
     xadminForceApproveMode.add(ADMIN_ID);
-    await bot.sendMessage(ADMIN_ID, '⚡ যে User ID কে সরাসরি (deposit ছাড়াই, শুধু টেস্টের জন্য) approve করতে চাও সেটা পাঠাও:');
+    await bot.sendMessage(ADMIN_ID, '✅ যে User ID কে Approve করতে চাও (bot এর Auto Approve এর একই logic ব্যবহার করবে) সেটা পাঠাও:');
+    return;
+  }
+
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ✅ নতুন — /xadmin এর নতুন ফিচারগুলোর callback হ্যান্ডলার
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  if (pair === 'xadmin_reguser' && userId === ADMIN_ID) {
+    xadminRegisterUserMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '✍️ যে User কে register করতে চাও, তার *User ID* (চাইলে সাথে নাম) পাঠাও:\n\nউদাহরণ: `123456789 Test User`', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'xadmin_userstatus' && userId === ADMIN_ID) {
+    xadminUserStatusMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '📊 যে User এর status দেখতে চাও তার *User ID* পাঠাও:', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'xadmin_delete_testdata' && userId === ADMIN_ID) {
+    xadminDeleteTestDataMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '🗑️ যে User এর Test Data মুছতে চাও তার *User ID* পাঠাও:', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'xadmin_editdeposit' && userId === ADMIN_ID) {
+    xadminEditDepositMode.add(ADMIN_ID);
+    await bot.sendMessage(ADMIN_ID, '💰 এই ফরম্যাটে পাঠাও: `TraderID NewAmount`\n\nউদাহরণ: `12345678 15`', { parse_mode: 'Markdown' });
+    return;
+  }
+
+  if (pair === 'xadmin_session_pause' && userId === ADMIN_ID) {
+    if (!sessionModule || !sessionModule.isSessionRunning()) { await bot.sendMessage(ADMIN_ID, '⚠️ এখন কোনো Session চলছে না।'); return; }
+    const ok = sessionModule.pauseSession();
+    await bot.sendMessage(ADMIN_ID, ok ? '⏸ Session Pause করা হয়েছে। (চলমান রাউন্ড শেষ হলে পরের সিগন্যাল আটকে যাবে)' : '❌ Pause করা যায়নি।');
+    return;
+  }
+
+  if (pair === 'xadmin_session_stop' && userId === ADMIN_ID) {
+    if (!sessionModule || !sessionModule.isSessionRunning()) { await bot.sendMessage(ADMIN_ID, '⚠️ এখন কোনো Session চলছে না।'); return; }
+    const ok = sessionModule.stopSessionNow();
+    await bot.sendMessage(ADMIN_ID, ok ? '⏹ Session বন্ধ করা হচ্ছে... (চলমান রাউন্ড শেষ হলে থামবে)' : '❌ Stop করা যায়নি।');
+    return;
+  }
+
+  if (pair === 'xadmin_clean_db' && userId === ADMIN_ID) {
+    await bot.sendMessage(ADMIN_ID, '🧹 Database Clean শুরু হচ্ছে... একটু সময় লাগবে।');
+    let checked = 0, removed = 0;
+    const candidates = [...startedUsers].filter(u => u !== ADMIN_ID).slice(0, 200);
+    for (const uid of candidates) {
+      checked++;
+      try {
+        await bot.getChat(uid);
+      } catch (e) {
+        const m = (e.message || '').toLowerCase();
+        if (m.includes('blocked') || m.includes('chat not found') || m.includes('deactivated') || m.includes('user not found')) {
+          startedUsers.delete(uid);
+          trialSignalCount.delete(uid);
+          trialScreenshotCount.delete(uid);
+          if (db) {
+            await db.collection('startedUsers').deleteOne({ userId: uid });
+            await db.collection('trialCounts').deleteOne({ userId: uid });
+          }
+          removed++;
+        }
+      }
+      await sleep(150);
+    }
+    await bot.sendMessage(ADMIN_ID,
+      '✅ *Database Clean সম্পন্ন!*\n\n🔍 Checked: ' + checked + '\n🗑️ Removed: ' + removed +
+      (startedUsers.size + removed > 200 ? '\n\n⚠️ একবারে সর্বোচ্চ ২০০ জন চেক করা হয়, আবার চালিয়ে বাকিদের চেক করুন।' : ''),
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (pair === 'xadmin_health' && userId === ADMIN_ID) {
+    await bot.sendMessage(ADMIN_ID, '🩺 Health Check চলছে...');
+
+    let mongoStatus = '❌ Fail';
+    try { if (db) { await db.command({ ping: 1 }); mongoStatus = '✅ OK'; } } catch (e) { mongoStatus = '❌ ' + e.message; }
+
+    let tdStatus = '❌ Fail';
+    const tdStart = Date.now();
+    try {
+      const r = await twelveData.getTimeSeries('EUR/USD', '1min', 2);
+      tdStatus = r && r.values ? '✅ OK (' + (Date.now() - tdStart) + 'ms)' : '⚠️ ডেটা পাওয়া যায়নি';
+    } catch (e) { tdStatus = '❌ ' + e.message; }
+
+    let geminiStatus = '❌ কোনো Key নেই';
+    try {
+      const status = geminiKeyPool.getStatus();
+      const active = status.filter(k => !k.exhausted).length;
+      geminiStatus = status.length === 0 ? '❌ কোনো Key নেই' : `✅ ${active}/${status.length} Key Active`;
+    } catch (e) { geminiStatus = '❌ ' + e.message; }
+
+    await bot.sendMessage(ADMIN_ID,
+      '🩺 *𝗔𝗣𝗜 𝗛𝗘𝗔𝗟𝗧𝗛 𝗖𝗛𝗘𝗖𝗞*\n\n' +
+      '🗄️ MongoDB: ' + mongoStatus + '\n' +
+      '📊 TwelveData: ' + tdStatus + '\n' +
+      '🧠 Gemini: ' + geminiStatus + '\n' +
+      '📸 Screenshot Module: ✅ Loaded\n' +
+      '🔧 Maintenance Mode: ' + (maintenanceMode ? '🔧 ON' : '✅ OFF') + '\n' +
+      '🛑 Emergency Mode: ' + (emergencyMode ? '🛑 ON' : '✅ OFF') + '\n' +
+      '▶️ Session Running: ' + (sessionModule && sessionModule.isSessionRunning() ? '✅ YES' : '❌ NO'),
+      { parse_mode: 'Markdown' }
+    );
+    return;
+  }
+
+  if (pair === 'xadmin_emergency' && userId === ADMIN_ID) {
+    emergencyMode = !emergencyMode;
+    const status = emergencyMode ? 'চালু 🛑' : 'বন্ধ ✅';
+    await bot.sendMessage(ADMIN_ID,
+      '🛑 *Emergency Mode ' + status + ' হয়েছে!*\n\n' +
+      (emergencyMode ? 'সব Signal, Screenshot এবং Session বন্ধ থাকবে (এমনকি admin এর জন্যও)।' : 'সব Feature আবার স্বাভাবিকভাবে কাজ করবে।'),
+      { parse_mode: 'Markdown' }
+    );
+    if (emergencyMode && sessionModule && sessionModule.isSessionRunning()) {
+      sessionModule.stopSessionNow();
+    }
+    return;
+  }
+
+  if (pair === 'xadmin_errorlogs' && userId === ADMIN_ID) {
+    if (errorLogBuffer.length === 0) { await bot.sendMessage(ADMIN_ID, '✅ কোনো Error Log নেই।'); return; }
+    const text = '🚨 *সর্বশেষ ' + errorLogBuffer.length + ' টি Error Log*\n\n' +
+      errorLogBuffer.slice(-20).map((e, i) => (i + 1) + '. `' + e.slice(0, 300) + '`').join('\n\n');
+    await bot.sendMessage(ADMIN_ID, text.slice(0, 4000), { parse_mode: 'Markdown' });
     return;
   }
 
@@ -1582,13 +1890,11 @@ setInterval(async () => {
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ✅ পরিবর্তিত — এখন registration আর deposit আলাদা status হিসেবে হ্যান্ডল করা হচ্ছে
 app.get('/postback', async (req, res) => {
   try {
     const { status, uid, eid, cid, sid, lid, country, sumdep, sumwithdraw, token } = req.query;
     console.log('📩 Postback received:', req.query);
 
-    // 🛡️ SECURITY PATCH — সঠিক secret token ছাড়া postback রিজেক্ট করা হচ্ছে
     if (token !== process.env.POSTBACK_SECRET) {
       console.log('🚫 Postback রিজেক্ট হলো — ভুল বা মিসিং token');
       res.status(403).send('Forbidden');
@@ -1602,7 +1908,6 @@ app.get('/postback', async (req, res) => {
     }
 
     const traderId = String(uid);
-    // status যদি array হয়ে যায় (duplicate query key এর কারণে) তাহলে প্রথমটা নেওয়া হচ্ছে
     const statusVal = String(Array.isArray(status) ? status[0] : (status || '')).toLowerCase();
 
     if (statusVal === 'reg') {
@@ -1625,7 +1930,6 @@ app.get('/postback', async (req, res) => {
       );
       console.log(`💰 Trader ID ${traderId} — Deposit updated: $${newTotal} (verified: ${verified})`);
     } else {
-      // conf, withdrawal, অথবা অন্য কোনো status — শুধু log/save করা হচ্ছে, কোনো action নেই
       await db.collection('affiliateVerified').updateOne(
         { traderId },
         { $set: { traderId, lastStatus: statusVal, receivedAt: new Date() } },
@@ -1647,11 +1951,14 @@ app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT
 
 connectDB().then(() => {
   sessionModule = require('./session');
+  if (typeof sessionModule.setEmergencyChecker === 'function') {
+    sessionModule.setEmergencyChecker(() => emergencyMode);
+  }
   sessionModule(bot);
-  console.log('Bot running v23 - Deposit-Based Verify + XAdmin Test Panel + Real Candle-Based Result Tracking...');
-  require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId);
+  console.log('Bot running v24 - XAdmin FULL Control Panel + Real Candle-Based Result Tracking...');
+  require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId, () => emergencyMode);
   const newsModule = require('./news')(bot);
-  require('./channel')(bot, newsModule);
+  require('./channel')(bot, newsModule, () => emergencyMode);
   bot.startPolling();
 }).catch(err => {
   console.error('MongoDB connection failed:', err);
