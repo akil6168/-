@@ -771,7 +771,25 @@ async function generateCandleChart(symbol, candles, entryPrice, exitPrice, badge
     const n = plotCandles.length;
     const timeLabels = plotCandles.map((_, i) => formatChartTime(n - 1 - i));
 
-    const ohlcData = plotCandles.map((c, i) => ({ x: i, o: c.open, h: c.high, l: c.low, c: c.close }));
+    // ✅ FIX: real trading-platform candlestick charts (Quotex/TradingView) show each
+    // candle's open starting exactly where the previous candle's close ended — a
+    // continuous "staircase". TwelveData's raw feed doesn't always guarantee that
+    // (small bid/ask snapshot differences), which made candles look disconnected /
+    // "opening from the middle". This builds a DISPLAY-ONLY copy with open snapped to
+    // the previous close (high/low extended to keep the box valid). The original
+    // `plotCandles`/`candles` arrays (used for indicators, S/R, and all trade-decision
+    // logic) are untouched — this only affects how the candle is drawn.
+    const displayCandles = plotCandles.map((c, i) => {
+      if (i === 0) return { ...c };
+      const snappedOpen = plotCandles[i - 1].close;
+      return {
+        open: snappedOpen,
+        close: c.close,
+        high: Math.max(c.high, snappedOpen),
+        low: Math.min(c.low, snappedOpen)
+      };
+    });
+    const ohlcData = displayCandles.map((c, i) => ({ x: i, o: c.open, h: c.high, l: c.low, c: c.close }));
     const ema7Series = calcEMASeries(plotCandles, 7);
     const ema21Series = calcEMASeries(plotCandles, 21);
     const sr = calcSupportResistance(candles);
@@ -1149,8 +1167,10 @@ async function runSignalRound(bot, signal, isMTG = false) {
 
   const badgeType = signal.direction === 'UP' ? 'CALL' : 'PUT';
   const dirSticker = signal.direction === 'UP' ? STICKERS.CALL : STICKERS.PUT;
-  await safeSendSticker(bot, dirSticker);
 
+  // ✅ FIX: caption (with ASSET name) + chart go out FIRST, so people always know
+  // which pair the signal is for before any direction cue appears. The CALL/PUT
+  // sticker is purely decorative and comes AFTER.
   const finalChart = await generateCandleChart(signal.symbol, signal.candles, entryPrice, null, badgeType, `M1 • ${entryTimeStr} (UTC+6) • CONFIDENCE ${signal.aiScore}% • LIVE MARKET`);
   const finalCaption = buildFinalSignalCaption(signal, flag, entryPrice, entryTimeStr, badgeType);
 
@@ -1159,6 +1179,8 @@ async function runSignalRound(bot, signal, isMTG = false) {
   } else {
     await safeSendMessage(bot, finalCaption, { parse_mode: 'Markdown' });
   }
+
+  await safeSendSticker(bot, dirSticker);
 
   console.log(`⏳ Waiting for candle close...`);
   await waitForCandleClose();
@@ -1193,6 +1215,57 @@ async function runSignalRound(bot, signal, isMTG = false) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// 🔄 MTG STEP 2 — same direction, immediate next candle
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// By the time the main round's result is computed, we've already waited past
+// the losing candle's close (xx:xx:58-59 + buffer). That moment IS the open of
+// the next candle. So there's no fresh "waitForCandleOpen" needed here — we
+// just grab the live price right now as the MTG entry (this equals the losing
+// candle's close unless the market genuinely gapped, in which case the live
+// price correctly reflects that gap), then wait for THIS candle to close.
+async function runMtgRound(bot, signal, mainResult) {
+  const pairInfo = SESSION_PAIRS.find(p => p.symbol === signal.symbol);
+  const flag = pairInfo ? pairInfo.flag : (signal.flag || '');
+
+  let entryPrice = mainResult.exitPrice; // fallback: previous candle's close
+  try {
+    const p = await getCurrentPrice(signal.symbol);
+    if (p) entryPrice = p;
+  } catch (e) {
+    console.log(`⚠️ MTG entry price fetch failed: ${e.message}`);
+  }
+  const entryTimeStr = getBDTime().fullTime;
+  console.log(`🔄 [MTG] ${signal.symbol} entry: ${entryPrice} @ ${entryTimeStr} (same direction: ${signal.direction})`);
+
+  await waitForCandleClose();
+  await sleep(1500);
+
+  let exitPrice = entryPrice;
+  try {
+    const p = await getCurrentPrice(signal.symbol);
+    if (p) exitPrice = p;
+  } catch (e) {
+    console.log(`⚠️ MTG exit price fetch failed: ${e.message}`);
+  }
+
+  const isWin = (signal.direction === 'UP' && exitPrice > entryPrice) ||
+                (signal.direction === 'DOWN' && exitPrice < entryPrice);
+
+  console.log(`🔄 [MTG] ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+
+  tracker.addResult(signal.symbol, signal.direction, isWin, true);
+
+  if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
+  await safeSendMessage(
+    bot,
+    buildResultMessage(signal, flag, entryPrice, exitPrice, isWin) + `\n\n🔄 (𝗠𝗧𝗚 𝗦𝘁𝗲𝗽 𝟮 𝗥𝗲𝘀𝘂𝗹𝘁)`,
+    { parse_mode: 'Markdown' }
+  );
+
+  return { isWin, entryPrice, exitPrice };
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 // 🎯 PRO SIGNAL SENDER (Main + MTG)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
@@ -1215,29 +1288,19 @@ async function sendProSignal(bot, signal) {
       return true;
     }
 
+    // ✅ FIX: MTG is NOT a fresh 3-5min re-analysis. Per spec: same direction, on the
+    // candle that IS ALREADY OPEN right now (the one immediately after the losing
+    // candle). Entry = actual current price (which naturally equals the previous
+    // candle's close unless a real gap just happened — no special-casing needed,
+    // fetching the live price handles both cases correctly).
     await safeSendMessage(bot,
-      `🔄 𝗥𝗘𝗖𝗢𝗩𝗘𝗥𝗬 𝗦𝗜𝗚𝗡𝗔𝗟\n\n` +
+      `🔄 𝗠𝗧𝗚 𝗦𝗧𝗘𝗣 𝟮 (𝗦𝗔𝗠𝗘 𝗗𝗜𝗥𝗘𝗖𝗧𝗜𝗢𝗡, 𝗡𝗘𝗫𝗧 𝗖𝗔𝗡𝗗𝗟𝗘)\n\n` +
       `📊 𝗔𝗦𝗦𝗘𝗧 ➜ ${signal.symbol} ${main.flag}\n` +
-      `⏳ 𝗪𝗔𝗜𝗧 ➜ 𝟯–𝟱 𝗠𝗶𝗻𝘂𝘁𝗲𝘀\n\n` +
-      `⚠️ 𝗣𝗹𝗲𝗮𝘀𝗲 𝘄𝗮𝗶𝘁 𝗳𝗼𝗿 𝘁𝗵𝗲 𝗼𝗳𝗳𝗶𝗰𝗶𝗮𝗹 𝘀𝗶𝗴𝗻𝗮𝗹. 𝗗𝗼 𝗻𝗼𝘁 𝗲𝗻𝘁𝗲𝗿 𝗮𝗻𝘆 𝘁𝗿𝗮𝗱𝗲 𝘂𝗻𝘁𝗶𝗹 𝗰𝗼𝗻𝗳𝗶𝗿𝗺𝗮𝘁𝗶𝗼𝗻`,
+      `স্বয়ংক্রিয়ভাবে চলছে, ম্যানুয়ালি কিছু করার দরকার নেই।`,
       { parse_mode: 'Markdown' }
     );
 
-    const mtgWaitMs = (3 + Math.random() * 2) * 60 * 1000;
-    console.log(`⏳ MTG wait: ${Math.round(mtgWaitMs / 1000)}s`);
-    await sleep(mtgWaitMs);
-
-    let mtgData = signal;
-    try {
-      const fresh = await analyzeSymbol(signal.symbol, false);
-      fresh.flag = main.flag;
-      mtgData = fresh;
-    } catch (e) {
-      console.log(`⚠️ MTG re-analysis failed: ${e.message}`);
-    }
-
-    const mtgResult = await runSignalRound(bot, mtgData, true);
-    if (mtgResult.cancelled) return null;
+    const mtgResult = await runMtgRound(bot, signal, main);
     return mtgResult.isWin;
 
   } catch (error) {
