@@ -101,7 +101,6 @@ function sleep(ms) {
 }
 
 // ✅ একটা key + model দিয়ে single attempt
-// রিটার্ন করে { ok, quotaExceeded, retryable, text }
 function callGeminiModel(model, apiKey, imageBase64) {
   return new Promise((resolve) => {
     const body = JSON.stringify({
@@ -247,14 +246,12 @@ REASON: (2 sentence detailed explanation)`
       res.on('end', () => {
         const status = res.statusCode;
 
-        // ✅ quota শেষ → এই key আজকের জন্য বাদ
         if (status === 429) {
           console.log(`GEMINI [${model}] key ...${apiKey.slice(-6)} QUOTA EXCEEDED (429)`);
           resolve({ ok: false, quotaExceeded: true, retryable: true, text: null });
           return;
         }
 
-        // ✅ overload / server error → key ঠিক আছে, model/server সমস্যা
         if (status === 503 || status >= 500) {
           console.log(`GEMINI [${model}] key ...${apiKey.slice(-6)} RETRYABLE STATUS ${status}:`, data.slice(0, 200));
           resolve({ ok: false, quotaExceeded: false, retryable: true, text: null });
@@ -287,11 +284,6 @@ REASON: (2 sentence detailed explanation)`
   });
 }
 
-// ✅ Multi-key + multi-model রোটেশন:
-// - প্রতিটা active key নিয়ে, প্রতিটা model try করবে
-// - quota (429) পেলে সেই key সাথে সাথে বাদ, পরের key তে চলে যাবে
-// - overload (503) পেলে সেই key দিয়েই পরের model try করবে
-// - এক round-এ সব key/model fail করলে ৩ সেকেন্ড wait করে আবার শুরু (মোট ২ round)
 async function analyzeChartWithGemini(imageBase64) {
   const maxRounds = 2;
   const delayBetweenRounds = 3000;
@@ -305,7 +297,7 @@ async function analyzeChartWithGemini(imageBase64) {
 
     while (true) {
       const apiKey = geminiKeyPool.getNextActiveKey(triedKeys);
-      if (!apiKey) break; // এই round-এ সব key শেষ (exhausted বা try করা হয়ে গেছে)
+      if (!apiKey) break;
 
       triedKeys.push(apiKey);
 
@@ -318,9 +310,8 @@ async function analyzeChartWithGemini(imageBase64) {
 
         if (result.quotaExceeded) {
           geminiKeyPool.markExhausted(apiKey);
-          break; // এই key দিয়ে আর model try করার দরকার নেই
+          break;
         }
-        // retryable (503 ইত্যাদি) হলে এই key দিয়েই পরের model try হবে
       }
     }
 
@@ -382,13 +373,20 @@ function parseGeminiResponse(text) {
   return result;
 }
 
-module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId) {
+// ✅ নতুন — শেষ প্যারামিটার হিসেবে isEmergency (একটা function) যোগ হলো
+module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId, isEmergency) {
 
   bot.on('photo', async (msg) => {
     const chatId = msg.chat.id;
     const userId = msg.from.id;
 
     if (bannedUsers.has(userId)) return;
+
+    // ✅ নতুন — Emergency Mode চালু থাকলে Screenshot Analysis বন্ধ
+    if (typeof isEmergency === 'function' && isEmergency()) {
+      await bot.sendMessage(chatId, '🛑 Bot এখন Emergency Mode এ আছে, একটু পর আবার চেষ্টা করুন।');
+      return;
+    }
 
     if (!isApproved(userId)) {
       if (getTrialScreenshotLeft(userId) <= 0) {
@@ -409,7 +407,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       }
     }
 
-    // আগের signal message delete
     if (lastSignalMsgId.has(userId)) {
       try { await bot.deleteMessage(chatId, lastSignalMsgId.get(userId)); } catch (e) {}
       lastSignalMsgId.delete(userId);
@@ -418,7 +415,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
     const { entry, expiry } = getEntryExpiry();
     const waitSeconds = getSecondsUntilNext50();
 
-    // ✅ প্রথম state: শুধু প্রথম step দেখাবে, 🔄 দিয়ে
     let activeStepIndex = 0;
     let remaining = waitSeconds;
 
@@ -427,7 +423,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       { parse_mode: 'Markdown' }
     );
 
-    // ✅ প্রতি সেকেন্ডে countdown আপডেট, step একটা একটা করে যোগ হবে
     const stepDuration = Math.max(1, Math.floor(waitSeconds / progressSteps.length));
     let elapsedSeconds = 0;
 
@@ -539,7 +534,6 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
         }
       );
 
-      // screenshot signal message id save
       lastSignalMsgId.set(userId, sentMsg.message_id);
 
     } catch (e) {
