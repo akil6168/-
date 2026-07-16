@@ -16,7 +16,7 @@ const fetch = require('node-fetch');
 // 📌 CONFIGURATION
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-const CHANNEL_ID = '-1002268650240';
+const CHANNEL_ID = ['-1002268650240', '-1002105823065'];
 const ADMIN_ID = 5724602667;
 
 const STICKERS = {
