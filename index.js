@@ -1546,16 +1546,20 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'admin_submissions' && userId === ADMIN_ID) {
     if (submissions.length === 0) { await bot.sendMessage(ADMIN_ID, '📋 কোনো submission নেই।'); return; }
-    // ✅ সর্বশেষ ৪০টা দেখাবে (পুরনোগুলো নিচে চাপা পড়ে থাকে, বেশি হলে মেসেজ অনেক বড় হয়ে যায়)
     const recent = submissions.slice(-40).reverse();
-    let text = '📋 *TRADER ID SUBMISSIONS* (সর্বশেষ ' + recent.length + '/' + submissions.length + ')\n\n';
+    let text = '📋 TRADER ID SUBMISSIONS (সর্বশেষ ' + recent.length + '/' + submissions.length + ')\n\n';
     recent.forEach((s, i) => {
-      const uname = mentionUser(s.userId, s.username, s.name);
+      const uname = s.username ? '@' + s.username : (s.name || 'Unknown');
       const autoTag = s.autoVerified ? ' ⚡' : (s.pendingDeposit ? ' ⏳' : '');
-      text += (i + 1) + '. ' + uname + autoTag + '\n🆔 User: `' + s.userId + '`\n📌 Trader ID: `' + s.traderId + '`\n\n';
+      text += (i + 1) + '. ' + uname + autoTag + '\n🆔 User: ' + s.userId + '\n📌 Trader ID: ' + s.traderId + '\n\n';
     });
-    text += '━━━━━━━━━━━━━━━━\n🗑️ মুছতে চাইলে "🗑️ Delete Submission" বাটন ব্যবহার করে *User ID* অথবা *Trader ID* পাঠাও।';
-    await bot.sendMessage(ADMIN_ID, text.slice(0, 4000), { parse_mode: 'Markdown' });
+    text += '━━━━━━━━━━━━━━━━\n🗑️ মুছতে চাইলে "🗑️ Delete Submission" বাটন ব্যবহার করে User ID অথবা Trader ID পাঠাও।';
+    try {
+      await bot.sendMessage(ADMIN_ID, text.slice(0, 4000));
+    } catch (e) {
+      console.error('admin_submissions send fail:', e.message);
+      await bot.sendMessage(ADMIN_ID, '❌ Submissions লিস্ট পাঠাতে সমস্যা হয়েছে: ' + e.message);
+    }
     return;
   }
 
@@ -1708,7 +1712,7 @@ bot.on('callback_query', async (query) => {
 
   // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
   // ✅ নতুন — /xadmin এর নতুন ফিচারগুলোর callback হ্যান্ডলার
-  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
   if (pair === 'xadmin_reguser' && userId === ADMIN_ID) {
     xadminRegisterUserMode.add(ADMIN_ID);
@@ -1829,9 +1833,13 @@ bot.on('callback_query', async (query) => {
 
   if (pair === 'xadmin_errorlogs' && userId === ADMIN_ID) {
     if (errorLogBuffer.length === 0) { await bot.sendMessage(ADMIN_ID, '✅ কোনো Error Log নেই।'); return; }
-    const text = '🚨 *সর্বশেষ ' + errorLogBuffer.length + ' টি Error Log*\n\n' +
-      errorLogBuffer.slice(-20).map((e, i) => (i + 1) + '. `' + e.slice(0, 300) + '`').join('\n\n');
-    await bot.sendMessage(ADMIN_ID, text.slice(0, 4000), { parse_mode: 'Markdown' });
+    const text = '🚨 সর্বশেষ ' + errorLogBuffer.length + ' টি Error Log\n\n' +
+      errorLogBuffer.slice(-20).map((e, i) => (i + 1) + '. ' + e.slice(0, 300)).join('\n\n');
+    try {
+      await bot.sendMessage(ADMIN_ID, text.slice(0, 4000));
+    } catch (e) {
+      await bot.sendMessage(ADMIN_ID, '❌ Error log পাঠাতে সমস্যা: ' + e.message);
+    }
     return;
   }
 
