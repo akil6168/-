@@ -2,6 +2,7 @@
 const https = require('https');
 const fs = require('fs');
 const path = require('path');
+const learner = require('./learner');
 
 const CHANNEL_ID = '-1002427080688';
 const ADMIN_ID = 5724602667;
@@ -606,9 +607,21 @@ function buildSignalMessage(best, entry, expiry) {
   );
 }
 
-function buildDailyReport() {
+async function buildDailyReport() {
   const dateStr = dailyStats.dateKey ? formatReportDate(dailyStats.dateKey) : formatReportDate(currentDateKey());
-  const { total, wins, losses } = dailyStats;
+
+  let total = dailyStats.total, wins = dailyStats.wins, losses = dailyStats.losses;
+  try {
+    const learnerStats = await learner.getSourceDailyStats('channel');
+    if (learnerStats) {
+      total = learnerStats.total;
+      wins = learnerStats.wins;
+      losses = learnerStats.losses;
+    }
+  } catch (e) {
+    console.log('⚠️ buildDailyReport learner fetch failed, using local fallback:', e.message);
+  }
+
   const winRate = total > 0 ? Math.round((wins / total) * 100) : 0;
 
   return (
@@ -644,6 +657,21 @@ async function checkSignalResult(signal) {
     if (isWin) dailyStats.wins++; else dailyStats.losses++;
 
     console.log(`📊 Result: ${signal.pair} | ${signal.direction} | Entry:${signal.currentPrice} Exit:${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+
+    // ✅ নতুন — এই signal-এর ফলাফল learner.js-এ (MongoDB signalResults collection) log হচ্ছে
+    learner.logResult({
+      source: 'channel',
+      symbol: signal.pair,
+      direction: signal.direction,
+      entryPrice: signal.currentPrice,
+      exitPrice,
+      aiScore: signal.aiScore,
+      signals: signal.signals,
+      isLive: signal.isLive,
+      finalResult: isWin ? 'DIRECT_WIN' : 'FINAL_LOSS',
+      directResult: isWin ? 'WIN' : 'LOSS',
+      mtgResult: null
+    }).catch(e => console.log('learner.logResult (channel) error:', e.message));
   } catch (e) {
     console.log('⚠️ Could not verify result for', signal.pair, '-', e.message);
   }
@@ -691,7 +719,8 @@ module.exports = function(bot, newsModule, isEmergency) {
     if (bdNow.hour === 0 && bdNow.minute >= 5 && bdNow.minute <= 9 && reportSentDateKey !== dateKeyNow) {
       reportSentDateKey = dateKeyNow;
       try {
-        await bot.sendMessage(CHANNEL_ID, buildDailyReport(), { parse_mode: 'Markdown' });
+        const reportText = await buildDailyReport();
+        await bot.sendMessage(CHANNEL_ID, reportText, { parse_mode: 'Markdown' });
         console.log('📊 Daily report sent for', dailyStats.dateKey);
       } catch (e) {
         console.log('Daily report send error:', e.message);
