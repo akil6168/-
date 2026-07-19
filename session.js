@@ -11,10 +11,7 @@ const twelveData = require('./twelvedata');
 const fs = require('fs');
 const path = require('path');
 const fetch = require('node-fetch');
-
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📌 CONFIGURATION
-// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+const learner = require('./learner');
 
 const CHANNEL_ID = '-1002268650240';
 const ADMIN_ID = 5724602667;
@@ -54,60 +51,25 @@ const SESSION_INTRO_MESSAGE =
   `⚠️ **প্রতিটি ট্রেডে 𝗠𝗼𝗻𝗲𝘆 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 এবং 𝗥𝗶𝘀𝗸 𝗠𝗮𝗻𝗮𝗴𝗲𝗺𝗲𝗻𝘁 অবশ্যই ফলো করবেন।**`;
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// 📊 PERFORMANCE TRACKER
+// 📊 PERFORMANCE TRACKER (✅ এখন শুধু in-process quick reference — persistent
+// storage আর stats.json এ না, সব MongoDB-তে learner.js এর মাধ্যমে যায়)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 class PerformanceTracker {
   constructor() {
-    this.statsFile = path.join(__dirname, 'stats.json');
-    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, sessions: {}, pairs: {}, daily: {}, mtg: { total: 0, wins: 0, losses: 0 }, cancelled: 0 };
-    this.loadStats();
-  }
-  loadStats() {
-    try { if (fs.existsSync(this.statsFile)) this.stats = { ...this.stats, ...JSON.parse(fs.readFileSync(this.statsFile)) }; } catch(e) {}
-  }
-  saveStats() {
-    try { fs.writeFileSync(this.statsFile, JSON.stringify(this.stats, null, 2)); } catch(e) {}
+    this.stats = { total: 0, wins: 0, losses: 0, winRate: 0, cancelled: 0 };
   }
   addResult(symbol, direction, isWin, isMTG = false) {
-    const today = getBDTime().dateKey;
     this.stats.total++;
     if (isWin) this.stats.wins++; else this.stats.losses++;
     this.stats.winRate = (this.stats.wins / this.stats.total * 100);
-    if (isMTG) {
-      this.stats.mtg.total++;
-      if (isWin) this.stats.mtg.wins++; else this.stats.mtg.losses++;
-    }
-    if (!this.stats.pairs[symbol]) this.stats.pairs[symbol] = { wins: 0, losses: 0 };
-    if (isWin) this.stats.pairs[symbol].wins++; else this.stats.pairs[symbol].losses++;
-    if (!this.stats.daily[today]) this.stats.daily[today] = { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
-    if (isWin) { if (isMTG) this.stats.daily[today].mtgWins++; else this.stats.daily[today].wins++; }
-    else { if (isMTG) this.stats.daily[today].mtgLosses++; else this.stats.daily[today].losses++; }
-    this.saveStats();
   }
   addCancelled() {
     this.stats.cancelled = (this.stats.cancelled || 0) + 1;
-    this.saveStats();
   }
-  getStatsMessage() {
-    const { total, wins, losses, winRate, pairs, mtg, cancelled } = this.stats;
-    const today = getBDTime().dateKey;
-    const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
-    const mtgRate = mtg.total > 0 ? (mtg.wins / mtg.total * 100) : 0;
-    let pairStats = '';
-    const sortedPairs = Object.entries(pairs).sort((a,b) => (b[1].wins+b[1].losses) - (a[1].wins+a[1].losses));
-    for (const [symbol, data] of sortedPairs.slice(0,5)) {
-      const rate = data.wins+data.losses > 0 ? (data.wins/(data.wins+data.losses)*100) : 0;
-      pairStats += `  • ${symbol}: ${rate.toFixed(1)}% (${data.wins}/${data.wins+data.losses})\n`;
-    }
-    return `📊 **QX AI PERFORMANCE v10.2**\n\n━━━━━━━━━━━━━━━━━━━\n📈 **TOTAL**: ${total}\n✅ **WINS**: ${wins}\n❌ **LOSSES**: ${losses}\n🎯 **WIN RATE**: ${winRate.toFixed(1)}%\n🔄 **MTG RATE**: ${mtgRate.toFixed(1)}% (${mtg.wins}/${mtg.total})\n🚫 **CANCELLED (Re-verify Failed)**: ${cancelled || 0}\n━━━━━━━━━━━━━━━━━━━\n\n📅 **TODAY**: ${daily.wins}W / ${daily.losses}L\n🔄 **MTG TODAY**: ${daily.mtgWins}W / ${daily.mtgLosses}L\n\n📊 **TOP PAIRS**\n${pairStats || '  No data yet'}\n\n💎 **OWNER**: @AkiL_xD 👾`;
-  }
-  getTodayStats() {
-    const today = getBDTime().dateKey;
-    const daily = this.stats.daily[today] || { wins: 0, losses: 0, mtgWins: 0, mtgLosses: 0 };
-    const totalToday = daily.wins + daily.losses + daily.mtgWins + daily.mtgLosses;
-    const rate = totalToday > 0 ? ((daily.wins + daily.mtgWins) / totalToday * 100) : 0;
-    return { wins: daily.wins + daily.mtgWins, losses: daily.losses + daily.mtgLosses, total: totalToday, rate, mtgWins: daily.mtgWins, mtgLosses: daily.mtgLosses };
+  // ✅ এখন MongoDB (learner.js) থেকে গত ৩০ দিনের real aggregate stats আনে
+  async getStatsMessage() {
+    return learner.getStatsMessage();
   }
 }
 
@@ -1146,6 +1108,14 @@ async function runSignalRound(bot, signal, isMTG = false) {
   if (!verification.confirmed) {
     console.log(`🚫 [${signal.symbol}] Signal CANCELLED — direction/confidence changed. No message sent.`);
     tracker.addCancelled();
+    learner.logResult({
+      source: 'session',
+      symbol: signal.symbol,
+      direction: signal.direction,
+      aiScore: signal.aiScore,
+      signals: signal.signals,
+      finalResult: 'UNVERIFIED'
+    }).catch(e => console.log('learner.logResult (session cancelled) error:', e.message));
     return { cancelled: true };
   }
   signal = { ...signal, ...verification.updatedData };
@@ -1208,6 +1178,22 @@ async function runSignalRound(bot, signal, isMTG = false) {
   }
   tracker.addResult(signal.symbol, signal.direction, isWin, isMTG);
 
+  // ✅ নতুন — এই main round-এর ফলাফল learner.js (MongoDB) এ log হচ্ছে
+  learner.logResult({
+    source: 'session',
+    symbol: signal.symbol,
+    direction: signal.direction,
+    entryTime: entryTimeStr,
+    entryPrice,
+    exitPrice,
+    aiScore: signal.aiScore,
+    signals: signal.signals,
+    isLive: true,
+    directResult: isWin ? 'WIN' : 'LOSS',
+    mtgResult: null,
+    finalResult: isWin ? 'DIRECT_WIN' : 'FINAL_LOSS'
+  }).catch(e => console.log('learner.logResult (session main) error:', e.message));
+
   if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
   await safeSendMessage(bot, buildResultMessage(signal, flag, entryPrice, exitPrice, isWin), { parse_mode: 'Markdown' });
 
@@ -1254,6 +1240,22 @@ async function runMtgRound(bot, signal, mainResult) {
   console.log(`🔄 [MTG] ${signal.symbol} | Entry: ${entryPrice} | Exit: ${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
 
   tracker.addResult(signal.symbol, signal.direction, isWin, true);
+
+  // ✅ নতুন — MTG round-এর ফলাফলও learner.js (MongoDB) এ log হচ্ছে
+  learner.logResult({
+    source: 'session',
+    symbol: signal.symbol,
+    direction: signal.direction,
+    entryTime: entryTimeStr,
+    entryPrice,
+    exitPrice,
+    aiScore: signal.aiScore,
+    signals: signal.signals,
+    isLive: true,
+    directResult: 'LOSS',
+    mtgResult: isWin ? 'WIN' : 'LOSS',
+    finalResult: isWin ? 'MTG_WIN' : 'FINAL_LOSS'
+  }).catch(e => console.log('learner.logResult (session mtg) error:', e.message));
 
   if (isWin) await safeSendSticker(bot, STICKERS.SURESHOT);
   await safeSendMessage(
@@ -1558,10 +1560,15 @@ module.exports = function (bot) {
       }
 
       if (h === 0 && m === 0 && s < 10) {
-        await safeSendMessage(bot,
-          `📊 **Daily Performance Report**\n\n${tracker.getStatsMessage()}\n\n📅 Date: ${dateKey}`,
-          { parse_mode: 'Markdown' }
-        );
+        try {
+          const reportText = await tracker.getStatsMessage();
+          await safeSendMessage(bot,
+            `📊 **Daily Performance Report**\n\n${reportText}\n\n📅 Date: ${dateKey}`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (e) {
+          console.log('Daily performance report error:', e.message);
+        }
       }
 
       if (m === 0 && s < 10) cleanupOldEntries();
@@ -1578,6 +1585,9 @@ module.exports = function (bot) {
 
 module.exports.runSession = (bot, sessionName) => runSession(bot, sessionName, true);
 module.exports.isSessionRunning = () => sessionRunning;
+// ⚠️ NOTE: এখন async (Promise<string> রিটার্ন করে), আগে ছিল sync (string সরাসরি)।
+// যদি অন্য কোথাও sessionModule.getStats() কে সরাসরি bot.sendMessage()-এ পাঠানো হয়ে
+// থাকে (await ছাড়া), সেটা এখন ভেঙে যাবে — await sessionModule.getStats() ব্যবহার করতে হবে।
 module.exports.getStats = () => tracker.getStatsMessage();
 
 // ✅ নতুন — Pause / Resume / Stop / Emergency exports
