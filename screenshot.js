@@ -1,6 +1,8 @@
 // screenshot.js - Maximum Deep Analysis + Chart Check
 const https = require('https');
 const geminiKeyPool = require('./geminikey');
+const twelveData = require('./twelvedata');
+const learner = require('./learner');
 
 const ADMIN_ID = 5724602667;
 
@@ -20,6 +22,25 @@ const GEMINI_MODELS = [
   'gemini-1.5-flash',
   'gemini-1.5-flash-8b'
 ];
+
+// ✅ নতুন — Gemini-র বলা pair নাম থেকে আমাদের real-pair তালিকার সাথে মেলানোর জন্য
+// (candle verification-এর জন্য দরকার — না মিললে verification স্কিপ হয়ে যায়, ক্র্যাশ করে না)
+const VERIFIABLE_PAIRS = [
+  'EUR/USD', 'GBP/USD', 'USD/JPY', 'AUD/USD', 'USD/CAD',
+  'EUR/GBP', 'USD/CHF', 'EUR/JPY', 'GBP/JPY', 'EUR/NZD',
+  'GBP/NZD', 'USD/PKR', 'USD/INR', 'USD/BDT', 'USD/IDR', 'CAD/CHF'
+];
+
+function normalizePairGuess(raw) {
+  if (!raw) return null;
+  const cleaned = raw.toUpperCase().replace(/\s+/g, '').replace('OTC', '').trim();
+  // "EURUSD" বা "EUR/USD" দুই ফরম্যাটই মেলানোর চেষ্টা
+  for (const pair of VERIFIABLE_PAIRS) {
+    const noSlash = pair.replace('/', '');
+    if (cleaned === noSlash || cleaned === pair) return pair;
+  }
+  return null;
+}
 
 function getBDDateKey() {
   const now = new Date();
@@ -121,7 +142,10 @@ Reply with exactly: NOT_A_CHART
 
 If this IS a trading candlestick chart, proceed to STEP 2.
 
-STEP 2 - DEEP ANALYSIS:
+STEP 2 - IDENTIFY THE PAIR (if visible):
+Look for the currency pair or asset name/symbol printed on the chart (usually top-left corner, e.g. "EUR/USD", "EURUSD", "GBPJPY OTC"). If you can clearly read it, note it exactly as shown. If it is not visible or you are not confident, write NONE.
+
+STEP 3 - DEEP ANALYSIS:
 You are a world-class professional binary options and forex trader with 20+ years of experience. Analyze this OTC trading chart using EVERY possible technical analysis method available.
 
 CANDLESTICK PATTERN ANALYSIS:
@@ -216,6 +240,7 @@ Determine CONFIDENCE based on confluence:
 - 86-100% = Very High
 
 Reply ONLY in this exact format, no asterisks, no extra text:
+PAIR: (pair name exactly as read from chart, or NONE)
 DIRECTION: UP or DOWN
 WIN_RATE: 75% or 80% or 85%
 CONFIDENCE: Medium or High or Very High
@@ -329,6 +354,7 @@ function parseGeminiResponse(text) {
   }
 
   const result = {
+    pairGuess: null,
     direction: null,
     winRate: '75%',
     confidence: 'Medium',
@@ -341,7 +367,11 @@ function parseGeminiResponse(text) {
     const clean = line.replace(/\*/g, '').replace(/#/g, '').trim();
     const lower = clean.toLowerCase();
 
-    if (lower.startsWith('direction:')) {
+    if (lower.startsWith('pair:')) {
+      const val = clean.substring(clean.indexOf(':') + 1).trim();
+      if (val && val.toUpperCase() !== 'NONE') result.pairGuess = val;
+    }
+    else if (lower.startsWith('direction:')) {
       const val = clean.substring(clean.indexOf(':') + 1).trim().toUpperCase();
       result.direction = val.includes('UP') ? 'UP' : val.includes('DOWN') ? 'DOWN' : null;
     }
@@ -371,6 +401,89 @@ function parseGeminiResponse(text) {
   }
 
   return result;
+}
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// ✅ নতুন — candle-based result verification (best-effort)
+//
+// Gemini ছবি থেকে pair নাম পড়তে পেরেছে এবং সেটা আমাদের VERIFIABLE_PAIRS
+// তালিকার সাথে মিলেছে — তাহলেই শুধু TwelveData থেকে real candle এনে win/loss
+// verify করা সম্ভব। না মিললে/না পড়তে পারলে শুধু direction+confidence
+// learner.js এ log হয়, finalResult: 'UNVERIFIED' দিয়ে (win/loss ছাড়া)।
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+async function verifyAndLogScreenshotResult(userId, signal, entry, expiry) {
+  const matchedPair = normalizePairGuess(signal.pairGuess);
+
+  if (!matchedPair) {
+    console.log(`📸 Screenshot pair অজানা/অমিলিত ("${signal.pairGuess || 'N/A'}") — শুধু direction/confidence log হচ্ছে, verify করা যাচ্ছে না।`);
+    learner.logResult({
+      source: 'screenshot',
+      userId,
+      symbol: signal.pairGuess || null,
+      direction: signal.direction,
+      entryTime: entry,
+      aiScore: null,
+      finalResult: 'UNVERIFIED'
+    }).catch(e => console.log('learner.logResult (screenshot unverified) error:', e.message));
+    return;
+  }
+
+  try {
+    // এন্ট্রির মুহূর্তে দাম রেকর্ড করে candle close (≈ ১ মিনিট পরে) পর্যন্ত অপেক্ষা
+    const beforeCandles = await twelveData.getTimeSeries(matchedPair, '1min', 2);
+    const entryPrice = beforeCandles && beforeCandles.values && beforeCandles.values.length
+      ? parseFloat(beforeCandles.values[0].close)
+      : null;
+
+    if (entryPrice === null) {
+      console.log(`📸 [${matchedPair}] entry price পাওয়া যায়নি — verify স্কিপ।`);
+      learner.logResult({
+        source: 'screenshot', userId, symbol: matchedPair, direction: signal.direction,
+        entryTime: entry, aiScore: null, finalResult: 'UNVERIFIED'
+      }).catch(e => console.log('learner.logResult (screenshot no-entry-price) error:', e.message));
+      return;
+    }
+
+    await sleep(65 * 1000); // পরের ১-মিনিট candle close হওয়া পর্যন্ত অপেক্ষা
+
+    const afterCandles = await twelveData.getTimeSeries(matchedPair, '1min', 2);
+    const exitPrice = afterCandles && afterCandles.values && afterCandles.values.length
+      ? parseFloat(afterCandles.values[0].close)
+      : null;
+
+    if (exitPrice === null) {
+      console.log(`📸 [${matchedPair}] exit price পাওয়া যায়নি — verify স্কিপ।`);
+      learner.logResult({
+        source: 'screenshot', userId, symbol: matchedPair, direction: signal.direction,
+        entryTime: entry, entryPrice, aiScore: null, finalResult: 'UNVERIFIED'
+      }).catch(e => console.log('learner.logResult (screenshot no-exit-price) error:', e.message));
+      return;
+    }
+
+    const isWin = signal.direction === 'UP' ? exitPrice > entryPrice : exitPrice < entryPrice;
+    console.log(`📸 [${matchedPair}] Screenshot verify | ${signal.direction} | Entry:${entryPrice} Exit:${exitPrice} | ${isWin ? 'WIN ✅' : 'LOSS ❌'}`);
+
+    learner.logResult({
+      source: 'screenshot',
+      userId,
+      symbol: matchedPair,
+      direction: signal.direction,
+      entryTime: entry,
+      entryPrice,
+      exitPrice,
+      aiScore: null,
+      directResult: isWin ? 'WIN' : 'LOSS',
+      mtgResult: null,
+      finalResult: isWin ? 'DIRECT_WIN' : 'FINAL_LOSS'
+    }).catch(e => console.log('learner.logResult (screenshot verified) error:', e.message));
+  } catch (e) {
+    console.log(`⚠️ Screenshot candle-verify ব্যর্থ (${matchedPair}):`, e.message);
+    learner.logResult({
+      source: 'screenshot', userId, symbol: matchedPair, direction: signal.direction,
+      entryTime: entry, aiScore: null, finalResult: 'UNVERIFIED'
+    }).catch(err => console.log('learner.logResult (screenshot catch) error:', err.message));
+  }
 }
 
 // ✅ নতুন — শেষ প্যারামিটার হিসেবে isEmergency (একটা function) যোগ হলো
@@ -535,6 +648,10 @@ module.exports = function(bot, db, approvedUsers, bannedUsers, isApproved, getTr
       );
 
       lastSignalMsgId.set(userId, sentMsg.message_id);
+
+      // ✅ নতুন — background-এ candle-check করে learner.js এ log করা (message flow ব্লক করে না)
+      verifyAndLogScreenshotResult(userId, signal, entry, expiry)
+        .catch(e => console.log('verifyAndLogScreenshotResult error:', e.message));
 
     } catch (e) {
       clearInterval(tickInterval);
