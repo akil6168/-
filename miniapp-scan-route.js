@@ -1,0 +1,38 @@
+const analysisEngine = require('./analysis-engine');
+
+function addScanRoute(app, deps) {
+  const { approvedUsers, bannedUsers, validateInitData } = deps;
+  const ADMIN_ID = 5724602667;
+
+  app.post('/miniapp/scan', async (req, res) => {
+    try {
+      const { initData, symbol } = req.body;
+      if (!initData || !symbol) {
+        return res.status(400).json({ signal: false, error: 'initData or symbol missing' });
+      }
+
+      const botToken = process.env.BOT_TOKEN;
+      const tgUser = validateInitData(initData, botToken);
+      if (!tgUser) return res.status(401).json({ signal: false, error: 'invalid initData' });
+
+      const userId = tgUser.id;
+      if (bannedUsers.has(userId)) return res.status(403).json({ signal: false, error: 'banned' });
+
+      const isAdmin = userId === ADMIN_ID;
+      const isApproved = isAdmin || approvedUsers.has(userId);
+      if (!isApproved) {
+        return res.status(403).json({ signal: false, error: 'not_verified' });
+      }
+
+      const cleanSymbol = String(symbol).replace(' OTC', '');
+
+      const result = await analysisEngine.analyze(cleanSymbol);
+      return res.json(result);
+    } catch (e) {
+      console.error('miniapp /scan error:', e.message);
+      return res.status(500).json({ signal: false, error: 'analysis failed' });
+    }
+  });
+}
+
+module.exports = { addScanRoute };
