@@ -33,11 +33,14 @@ const { addScanRoute } = require('./miniapp-scan-route');
 function registerMiniAppRoutes(app, { db, approvedUsers, bannedUsers, submissions }) {
   app.use(require('express').json());
 
-  // CORS ফিক্স — Mini App ফ্রন্টএন্ড থেকে POST রিকোয়েস্ট যেতে দেয়ার জন্য
+  // CORS ফিক্স — ব্রাউজার/WebView যা যা হেডার পাঠায় (X-Requested-With সহ) তার সবই allow করা হয়
   app.use('/miniapp', (req, res, next) => {
     res.header('Access-Control-Allow-Origin', '*');
     res.header('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Content-Type');
+    res.header(
+      'Access-Control-Allow-Headers',
+      req.headers['access-control-request-headers'] || 'Content-Type, X-Requested-With'
+    );
     if (req.method === 'OPTIONS') {
       return res.sendStatus(200);
     }
