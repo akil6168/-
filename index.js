@@ -4,6 +4,7 @@ const { MongoClient } = require('mongodb');
 const express = require('express');
 const twelveData = require('./twelvedata');
 const geminiKeyPool = require('./geminikey');
+const learner = require('./learner');
 
 const TOKEN = process.env.BOT_TOKEN;
 const MONGO_URI = process.env.MONGO_URI;
@@ -230,9 +231,12 @@ async function waitForCandleByDatetime(symbol, targetDatetimeStr, maxAttempts = 
   return null;
 }
 
+// ✅ এখন সরাসরি db.collection('signalResults') এ insert না করে learner.js এর মাধ্যমে
+// যায় — একই collection, কিন্তু এখন source:'index' ট্যাগ যোগ হয় এবং সব বট-জোড়া
+// consistent structure মেনে চলে (learner.js এর daily/weekly report এই ডেটাও গোনে)
 async function saveSignalRecord(record) {
   try {
-    if (db) await db.collection('signalResults').insertOne(record);
+    await learner.logResult({ source: 'index', ...record });
   } catch (e) {
     console.log('saveSignalRecord error:', e.message);
   }
@@ -337,6 +341,9 @@ async function connectDB() {
   await client.connect();
   db = client.db('qxbot');
   console.log('MongoDB connected!');
+
+  // ✅ নতুন — learner.js একই db connection ব্যবহার করে (আলাদা connection বানায় না)
+  learner.init(db);
 
   const su = await db.collection('startedUsers').find().toArray();
   su.forEach(u => startedUsers.add(u.userId));
@@ -1963,6 +1970,7 @@ connectDB().then(() => {
     sessionModule.setEmergencyChecker(() => emergencyMode);
   }
   sessionModule(bot);
+  learner.startScheduler(bot); // ✅ নতুন — daily/weekly learning report scheduler চালু
   console.log('Bot running v24 - XAdmin FULL Control Panel + Real Candle-Based Result Tracking...');
   require('./screenshot')(bot, db, approvedUsers, bannedUsers, isApproved, getTrialScreenshotLeft, incrementTrialScreenshot, sendVerifyPrompt, FREE_TRIAL_SCREENSHOT, signalInlineKeyboard, lastSignalMsgId, () => emergencyMode);
   const newsModule = require('./news')(bot);
