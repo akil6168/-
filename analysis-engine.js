@@ -132,8 +132,10 @@ function scoreTimeframe(candles) {
   return { direction, agreement, adx, rsi, macdHistogram: macd.histogram, pattern: pa.pattern, trend: ema5 > ema20 ? 'UP' : 'DOWN' };
 }
 
-const MIN_AGREEMENT = 0.70;
-const MIN_ADX = 20;
+// ফাইন-টিউন করা থ্রেশহোল্ড — আগের চেয়ে একটু শিথিল, যাতে ভালো (কিন্তু পারফেক্ট না) সেটআপেও সিগন্যাল আসে
+const MIN_AGREEMENT = 0.62;
+const MIN_ADX = 14;
+const STRONG_SINGLE_TF_AGREEMENT = 0.75; // এক টাইমফ্রেমে যথেষ্ট শক্তিশালী হলে mismatch সত্ত্বেও বিবেচনা করা হবে
 
 async function analyze(symbol) {
   const [m1, m5] = await Promise.all([
@@ -153,7 +155,16 @@ async function analyze(symbol) {
   const score1m = scoreTimeframe(candles1m);
   const score5m = scoreTimeframe(candles5m);
 
-  if (score1m.direction !== score5m.direction) {
+  let finalDirection = null;
+
+  if (score1m.direction === score5m.direction) {
+    finalDirection = score1m.direction;
+  } else if (score1m.agreement >= STRONG_SINGLE_TF_AGREEMENT) {
+    // 1m নিজেই যথেষ্ট শক্তিশালী — 5m-এর সাথে না মিললেও এগিয়ে যাওয়া যাবে
+    finalDirection = score1m.direction;
+  } else if (score5m.agreement >= STRONG_SINGLE_TF_AGREEMENT) {
+    finalDirection = score5m.direction;
+  } else {
     return { signal: false, reason: 'TIMEFRAME_MISMATCH', detail: { m1: score1m, m5: score5m } };
   }
 
@@ -161,15 +172,17 @@ async function analyze(symbol) {
     return { signal: false, reason: 'SIDEWAYS_MARKET', detail: { adx: score1m.adx } };
   }
 
-  if (score1m.agreement < MIN_AGREEMENT) {
-    return { signal: false, reason: 'LOW_AGREEMENT', detail: { agreement: score1m.agreement } };
+  const relevantAgreement = finalDirection === score1m.direction ? score1m.agreement : score5m.agreement;
+
+  if (relevantAgreement < MIN_AGREEMENT) {
+    return { signal: false, reason: 'LOW_AGREEMENT', detail: { agreement: relevantAgreement } };
   }
 
-  const confidencePct = Math.round(score1m.agreement * 100);
+  const confidencePct = Math.round(relevantAgreement * 100);
 
   return {
     signal: true,
-    direction: score1m.direction === 'UP' ? 'UP⏫' : 'DOWN⏬',
+    direction: finalDirection === 'UP' ? 'UP⏫' : 'DOWN⏬',
     confidencePct,
     symbol,
     detail: {
