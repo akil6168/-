@@ -3,6 +3,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { MongoClient } = require('mongodb');
 const express = require('express');
 const twelveData = require('./twelvedata');
+const { registerMiniAppRoutes } = require('./miniapp-api');
 const geminiKeyPool = require('./geminikey');
 const learner = require('./learner');
 
@@ -1961,7 +1962,7 @@ app.get('/postback', async (req, res) => {
 });
 
 app.get('/', (req, res) => res.send('Bot is running.'));
-
+registerMiniAppRoutes(app, { db, approvedUsers, bannedUsers, submissions });
 app.listen(PORT, () => console.log(`✅ Postback server listening on port ${PORT}`));
 
 connectDB().then(() => {
