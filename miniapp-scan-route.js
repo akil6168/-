@@ -27,6 +27,23 @@ function addScanRoute(app, deps) {
       const cleanSymbol = String(symbol).replace(' OTC', '');
 
       const result = await analysisEngine.analyze(cleanSymbol);
+
+      // ✅ নতুন — এন্ট্রি/ক্লোজ টাইম হিসাব (পরবর্তী পূর্ণ মিনিট থেকে শুরু)
+      if (result.signal) {
+        const now = new Date();
+        const entryDate = new Date(Math.floor((now.getTime() + 60000) / 60000) * 60000);
+        const closeDate = new Date(entryDate.getTime() + 60000);
+
+        const bdEntry = new Date(entryDate.getTime() + 6 * 60 * 60 * 1000);
+        const bdClose = new Date(closeDate.getTime() + 6 * 60 * 60 * 1000);
+        const fmt = (d) => String(d.getUTCHours()).padStart(2, '0') + ':' + String(d.getUTCMinutes()).padStart(2, '0');
+
+        result.entryTime = fmt(bdEntry);
+        result.closeTime = fmt(bdClose);
+        result.entryEpochMs = entryDate.getTime();
+        result.closeEpochMs = closeDate.getTime();
+      }
+
       return res.json(result);
     } catch (e) {
       console.error('miniapp /scan error:', e.message);
